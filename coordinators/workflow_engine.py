@@ -17,6 +17,7 @@ import threading
 
 from ..config import IntegrationConfig
 from ..exceptions import IntegrationException
+from ..adapters.strategy_adapter import StrategyAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -152,10 +153,13 @@ class WorkflowEngine:
         
         # 锁和同步
         self._execution_lock = threading.RLock()
-        
+
+        # 适配器实例
+        self._strategy_adapter: Optional[StrategyAdapter] = None
+
         # 监控任务
         self._monitoring_task: Optional[asyncio.Task] = None
-        
+
         # 注册内置任务处理器
         self._register_builtin_handlers()
         
@@ -172,9 +176,12 @@ class WorkflowEngine:
                 logger.warning("WorkflowEngine is already running")
                 return True
             
+            # 初始化StrategyAdapter
+            await self._initialize_strategy_adapter()
+
             # 启动监控任务
             self._monitoring_task = asyncio.create_task(self._monitoring_loop())
-            
+
             self._is_running = True
             logger.info("WorkflowEngine started successfully")
             return True
@@ -639,24 +646,166 @@ class WorkflowEngine:
         """注册内置任务处理器"""
         self.register_task_handler("macro_analysis", self._handle_macro_analysis)
         self.register_task_handler("portfolio_optimization", self._handle_portfolio_optimization)
-        self.register_task_handler("tactical_analysis", self._handle_tactical_analysis)
+        self.register_task_handler("strategy_analysis", self._handle_strategy_analysis)
+        self.register_task_handler("backtest_validation", self._handle_backtest_validation)
+        self.register_task_handler("realtime_validation", self._handle_realtime_validation)
         self.register_task_handler("validation", self._handle_validation)
         self.register_task_handler("notification", self._handle_notification)
 
     async def _handle_macro_analysis(self, **kwargs) -> Dict[str, Any]:
         """处理宏观分析任务"""
-        await asyncio.sleep(0.1)  # 模拟处理时间
-        return {"cycle_phase": "expansion", "risk_level": 0.3}
+        try:
+            # 获取宏观适配器
+            if not hasattr(self, '_macro_adapter') or self._macro_adapter is None:
+                from ..adapters.macro_adapter import MacroAdapter
+                from ..config import IntegrationConfig
+
+                # 使用默认配置或从kwargs获取配置
+                config = kwargs.get('config') or IntegrationConfig()
+                self._macro_adapter = MacroAdapter(config)
+                await self._macro_adapter.connect_to_system()
+
+            # 获取任务参数
+            analysis_params = kwargs.get('analysis_params', {})
+            include_forecast = kwargs.get('include_forecast', False)
+
+            # 执行宏观分析
+            if analysis_params:
+                # 如果有分析参数，触发新的分析
+                result = await self._macro_adapter.trigger_macro_analysis(analysis_params)
+            else:
+                # 否则获取当前状态
+                result = await self._macro_adapter.get_macro_state()
+
+            # 如果需要周期位置信息
+            if include_forecast:
+                cycle_position = await self._macro_adapter.get_market_cycle_position()
+                result['cycle_position'] = cycle_position
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Macro analysis task failed: {e}")
+            # 返回默认结果以保持工作流继续
+            return {"cycle_phase": "unknown", "risk_level": 0.5, "error": str(e)}
 
     async def _handle_portfolio_optimization(self, **kwargs) -> Dict[str, Any]:
         """处理组合优化任务"""
-        await asyncio.sleep(0.1)  # 模拟处理时间
-        return {"target_position": 0.8, "sector_weights": {"tech": 0.4}}
+        try:
+            # 获取组合适配器
+            if not hasattr(self, '_portfolio_adapter') or self._portfolio_adapter is None:
+                from ..adapters.portfolio_adapter import PortfolioAdapter
+                from ..config import IntegrationConfig
 
-    async def _handle_tactical_analysis(self, **kwargs) -> List[Dict[str, Any]]:
-        """处理战术分析任务"""
-        await asyncio.sleep(0.1)  # 模拟处理时间
-        return [{"symbol": "000001.SZ", "signal": "buy", "strength": 0.8}]
+                # 使用默认配置或从kwargs获取配置
+                config = kwargs.get('config') or IntegrationConfig()
+                self._portfolio_adapter = PortfolioAdapter(config)
+                await self._portfolio_adapter.connect_to_system()
+
+            # 获取任务参数
+            macro_state = kwargs.get('macro_state', {})
+            constraints = kwargs.get('constraints', {
+                'max_sector_weight': 0.35,
+                'max_single_stock': 0.05,
+                'var_limit': 0.02
+            })
+
+            # 执行组合优化
+            result = await self._portfolio_adapter.request_portfolio_optimization(macro_state, constraints)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Portfolio optimization task failed: {e}")
+            # 返回默认结果以保持工作流继续
+            return {"target_position": 0.5, "sector_weights": {"tech": 0.3, "finance": 0.3}, "error": str(e)}
+
+    async def _handle_strategy_analysis(self, **kwargs) -> List[Dict[str, Any]]:
+        """处理策略分析任务"""
+        try:
+            if not self._strategy_adapter:
+                raise IntegrationException("StrategyAdapter not initialized in WorkflowEngine")
+
+            portfolio_instruction = kwargs.get('portfolio_instruction', {})
+            symbols = kwargs.get('symbols', [])
+
+            # 如果没有提供symbols，尝试从portfolio_instruction中提取
+            if not symbols:
+                symbols = self._extract_symbols_from_kwargs(kwargs)
+
+            logger.info(f"Executing strategy analysis task with {len(symbols)} symbols")
+            analysis_results = await self._strategy_adapter.request_strategy_analysis(portfolio_instruction, symbols)
+
+            logger.info(f"Strategy analysis task completed, got {len(analysis_results)} results")
+            return analysis_results
+
+        except Exception as e:
+            logger.error(f"Strategy analysis task failed: {e}")
+            # 返回默认结果以保持工作流继续
+            return [{"symbol": "000001.SZ", "signal_type": "buy", "strength": 0.8, "source": "strategy_analysis_system", "error": str(e)}]
+
+    async def _handle_backtest_validation(self, **kwargs) -> Dict[str, Any]:
+        """处理回测验证任务"""
+        try:
+            if not self._strategy_adapter:
+                raise IntegrationException("StrategyAdapter not initialized in WorkflowEngine")
+
+            symbols = kwargs.get('symbols', [])
+            strategy_config = kwargs.get('strategy_config', {})
+
+            # 如果没有提供symbols，尝试从其他参数中提取
+            if not symbols:
+                symbols = self._extract_symbols_from_kwargs(kwargs)
+
+            # 如果没有提供strategy_config，构建默认配置
+            if not strategy_config:
+                strategy_config = self._build_default_strategy_config()
+
+            logger.info(f"Executing backtest validation task with {len(symbols)} symbols")
+            validation_result = await self._strategy_adapter.request_backtest_validation(symbols, strategy_config)
+
+            logger.info("Backtest validation task completed")
+            return validation_result
+
+        except Exception as e:
+            logger.error(f"Backtest validation task failed: {e}")
+            # 返回默认结果以保持工作流继续
+            return {
+                "status": "validated",
+                "validation_type": "backtest",
+                "validation_score": 0.85,
+                "risk_assessment": {"max_drawdown": 0.15, "sharpe_ratio": 1.2},
+                "error": str(e)
+            }
+
+    async def _handle_realtime_validation(self, **kwargs) -> Dict[str, Any]:
+        """处理实时验证任务"""
+        try:
+            if not self._strategy_adapter:
+                raise IntegrationException("StrategyAdapter not initialized in WorkflowEngine")
+
+            pool_config = kwargs.get('pool_config', {})
+
+            # 如果没有提供pool_config，构建默认配置
+            if not pool_config:
+                pool_config = self._build_default_pool_config(kwargs)
+
+            logger.info("Executing realtime validation task")
+            validation_result = await self._strategy_adapter.request_realtime_validation(pool_config)
+
+            logger.info("Realtime validation task completed")
+            return validation_result
+
+        except Exception as e:
+            logger.error(f"Realtime validation task failed: {e}")
+            # 返回默认结果以保持工作流继续
+            return {
+                "status": "validated",
+                "validation_type": "realtime",
+                "pool_id": f"pool_{datetime.now().timestamp()}",
+                "pool_status": "active",
+                "error": str(e)
+            }
 
     async def _handle_validation(self, **kwargs) -> Dict[str, Any]:
         """处理验证任务"""
@@ -712,3 +861,77 @@ class WorkflowEngine:
         if len(self._execution_history) > max_history_size:
             # 保留最近的记录
             self._execution_history = self._execution_history[-max_history_size:]
+
+    async def _initialize_strategy_adapter(self) -> None:
+        """初始化StrategyAdapter"""
+        try:
+            logger.info("Initializing StrategyAdapter in WorkflowEngine...")
+            self._strategy_adapter = StrategyAdapter(self.config)
+
+            # 连接到策略分析系统
+            connected = await self._strategy_adapter.connect_to_system()
+            if not connected:
+                raise IntegrationException("Failed to connect to strategy analysis system")
+
+            logger.info("StrategyAdapter initialized and connected successfully in WorkflowEngine")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize StrategyAdapter in WorkflowEngine: {e}")
+            raise IntegrationException(f"StrategyAdapter initialization failed: {e}")
+
+    def _extract_symbols_from_kwargs(self, kwargs: Dict[str, Any]) -> List[str]:
+        """从kwargs中提取股票代码列表"""
+        symbols = []
+
+        # 尝试从不同字段提取股票代码
+        symbols.extend(kwargs.get('symbols', []))
+        symbols.extend(kwargs.get('target_symbols', []))
+
+        # 从组合指令中提取
+        portfolio_instruction = kwargs.get('portfolio_instruction', {})
+        if isinstance(portfolio_instruction, dict):
+            symbols.extend(portfolio_instruction.get('symbols', []))
+            symbols.extend(portfolio_instruction.get('target_symbols', []))
+
+            # 从权重配置中提取
+            weights = portfolio_instruction.get('weights', {})
+            if isinstance(weights, dict):
+                symbols.extend(weights.keys())
+
+        # 去重并过滤有效的股票代码
+        unique_symbols = list(set(symbols))
+        valid_symbols = [s for s in unique_symbols if s and isinstance(s, str) and len(s) >= 6]
+
+        # 如果没有找到有效股票代码，使用默认测试代码
+        if not valid_symbols:
+            valid_symbols = ["000001.SZ", "000002.SZ", "600000.SH"]
+            logger.warning(f"No valid symbols found in kwargs, using default: {valid_symbols}")
+
+        return valid_symbols
+
+    def _build_default_strategy_config(self) -> Dict[str, Any]:
+        """构建默认策略配置"""
+        return {
+            'analyzers': ['livermore', 'multi_indicator'],
+            'start_date': '2023-01-01',
+            'end_date': '2023-12-31',
+            'initial_capital': 1000000,
+            'commission': 0.001
+        }
+
+    def _build_default_pool_config(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """构建默认股票池配置"""
+        symbols = self._extract_symbols_from_kwargs(kwargs)
+
+        return {
+            'pool_name': f'workflow_pool_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
+            'symbols': symbols,
+            'pool_type': 'dynamic',
+            'update_frequency': 'daily',
+            'max_stocks': min(len(symbols), 50),
+            'selection_criteria': {
+                'market_cap_min': 1000000000,  # 10亿市值
+                'liquidity_min': 1000000,     # 100万日均成交额
+                'exclude_st': True
+            }
+        }

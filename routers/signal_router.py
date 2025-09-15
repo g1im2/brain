@@ -22,6 +22,7 @@ from ..exceptions import (
 )
 from .conflict_resolver import ConflictResolver
 from .signal_processor import SignalProcessor
+from ..adapters.strategy_adapter import StrategyAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +46,8 @@ class SignalRouter(ISignalRouter):
         # 信号队列和缓存
         self._signal_queues: Dict[str, asyncio.Queue] = {
             'macro_to_portfolio': asyncio.Queue(maxsize=self.config.signal_router.max_signal_queue_size),
-            'portfolio_to_tactical': asyncio.Queue(maxsize=self.config.signal_router.max_signal_queue_size),
-            'tactical_to_execution': asyncio.Queue(maxsize=self.config.signal_router.max_signal_queue_size)
+            'portfolio_to_strategy': asyncio.Queue(maxsize=self.config.signal_router.max_signal_queue_size),
+            'strategy_to_validation': asyncio.Queue(maxsize=self.config.signal_router.max_signal_queue_size)
         }
         
         # 信号历史和统计
@@ -56,7 +57,10 @@ class SignalRouter(ISignalRouter):
         # 组件
         self._conflict_resolver = ConflictResolver(config)
         self._signal_processor = SignalProcessor(config)
-        
+
+        # 适配器实例
+        self._strategy_adapter: Optional[StrategyAdapter] = None
+
         # 路由规则和策略
         self._routing_rules: Dict[str, Dict[str, Any]] = {}
         self._load_routing_rules()
@@ -81,10 +85,13 @@ class SignalRouter(ISignalRouter):
                 logger.warning("SignalRouter is already running")
                 return True
             
+            # 初始化StrategyAdapter
+            await self._initialize_strategy_adapter()
+
             # 启动组件
             await self._conflict_resolver.start()
             await self._signal_processor.start()
-            
+
             # 启动监控任务
             self._monitoring_task = asyncio.create_task(self._monitoring_loop())
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -209,67 +216,67 @@ class SignalRouter(ISignalRouter):
                         validation_result['errors']
                     )
             
-            # 路由到战术层
-            tactical_allocation = await self._route_to_tactical_layer(standard_signal)
-            
+            # 路由到策略层
+            strategy_allocation = await self._route_to_strategy_layer(standard_signal)
+
             # 记录路由结果
             routing_result = SignalRoutingResult(
                 routing_id=routing_id,
                 source_layer="portfolio",
-                target_layer="tactical",
+                target_layer="strategy",
                 original_signals=[instruction],
-                routed_signals=[tactical_allocation],
+                routed_signals=[strategy_allocation],
                 routing_time=(datetime.now() - start_time).total_seconds()
             )
-            
+
             self._record_routing_result(routing_result)
-            
+
             logger.debug(f"Portfolio signal routing completed: {routing_id}")
-            return tactical_allocation
+            return strategy_allocation
             
         except Exception as e:
             logger.error(f"Failed to route portfolio signals: {e}")
             raise SignalRouterException(f"Portfolio signal routing failed: {e}")
     
-    async def route_trading_signals(self, signals: List[Any]) -> List[Any]:
-        """路由交易信号
-        
+    async def route_analysis_results(self, results: List[Any]) -> List[Any]:
+        """路由分析结果
+
         Args:
-            signals: 交易信号列表
-            
+            results: 分析结果列表
+
         Returns:
-            List[Any]: 路由后的信号列表
+            List[Any]: 路由后的结果列表
         """
         try:
             routing_id = str(uuid.uuid4())
             start_time = datetime.now()
             
-            logger.debug(f"Routing trading signals: {routing_id}, count: {len(signals)}")
-            
-            # 批量处理信号
+            logger.debug(f"Routing analysis results: {routing_id}, count: {len(results)}")
+
+            # 批量处理结果
             batch_size = self.config.signal_router.batch_processing_size
-            routed_signals = []
-            
-            for i in range(0, len(signals), batch_size):
-                batch = signals[i:i + batch_size]
-                batch_result = await self._process_signal_batch(batch)
-                routed_signals.extend(batch_result)
+            routed_results = []
+
+            for i in range(0, len(results), batch_size):
+                batch = results[i:i + batch_size]
+                batch_result = await self._process_result_batch(batch)
+                routed_results.extend(batch_result)
             
             # 记录路由结果
             routing_result = SignalRoutingResult(
                 routing_id=routing_id,
-                source_layer="tactical",
-                target_layer="execution",
-                original_signals=signals,
-                routed_signals=routed_signals,
+                source_layer="strategy",
+                target_layer="validation",
+                original_signals=results,
+                routed_signals=routed_results,
                 routing_time=(datetime.now() - start_time).total_seconds(),
-                success_rate=len(routed_signals) / len(signals) if signals else 1.0
+                success_rate=len(routed_results) / len(results) if results else 1.0
             )
-            
+
             self._record_routing_result(routing_result)
-            
-            logger.debug(f"Trading signal routing completed: {routing_id}")
-            return routed_signals
+
+            logger.debug(f"Analysis results routing completed: {routing_id}")
+            return routed_results
             
         except Exception as e:
             logger.error(f"Failed to route trading signals: {e}")
@@ -328,12 +335,12 @@ class SignalRouter(ISignalRouter):
                 'priority_mapping': {'high': 5, 'medium': 3, 'low': 1},
                 'validation_rules': ['format_check', 'range_check']
             },
-            'portfolio_to_tactical': {
+            'portfolio_to_strategy': {
                 'timeout': self.config.signal_router.signal_timeout,
                 'priority_mapping': {'urgent': 5, 'normal': 3, 'low': 1},
                 'validation_rules': ['format_check', 'constraint_check']
             },
-            'tactical_to_execution': {
+            'strategy_to_validation': {
                 'timeout': self.config.signal_router.signal_timeout,
                 'priority_mapping': {'immediate': 5, 'normal': 3, 'delayed': 1},
                 'validation_rules': ['format_check', 'risk_check']
@@ -358,7 +365,7 @@ class SignalRouter(ISignalRouter):
             signal_id=str(uuid.uuid4()),
             signal_type="portfolio_instruction",
             source="portfolio_layer",
-            target="tactical_layer",
+            target="strategy_layer",
             strength=0.7,  # 基于指令计算
             confidence=0.8,  # 基于指令计算
             data=instruction if isinstance(instruction, dict) else {"instruction": instruction}
@@ -370,15 +377,62 @@ class SignalRouter(ISignalRouter):
     
     async def _route_to_portfolio_layer(self, signal: StandardSignal) -> Any:
         """路由到组合层"""
-        # 这里应该调用组合适配器
-        await asyncio.sleep(0.01)  # 模拟处理时间
-        return {"target_position": 0.8, "sector_weights": signal.data}
+        try:
+            # 获取组合适配器
+            if not hasattr(self, '_portfolio_adapter') or self._portfolio_adapter is None:
+                from ..adapters.portfolio_adapter import PortfolioAdapter
+                from ..config import IntegrationConfig
+
+                config = getattr(self, 'config', IntegrationConfig())
+                self._portfolio_adapter = PortfolioAdapter(config)
+                await self._portfolio_adapter.connect_to_system()
+
+            # 构造组合优化请求
+            optimization_request = {
+                'type': 'portfolio_optimization',
+                'macro_state': signal.data,
+                'constraints': {
+                    'max_sector_weight': 0.35,
+                    'max_single_stock': 0.05
+                },
+                'signal_strength': signal.strength,
+                'signal_confidence': signal.confidence
+            }
+
+            # 执行组合优化
+            result = await self._portfolio_adapter.request_portfolio_optimization(
+                signal.data, optimization_request.get('constraints', {})
+            )
+
+            logger.debug(f"Portfolio signal routing completed for signal: {signal.signal_id}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Portfolio signal routing failed: {e}")
+            # 返回默认结果以保持信号流继续
+            return {"target_position": 0.6, "sector_weights": signal.data, "error": str(e)}
     
-    async def _route_to_tactical_layer(self, signal: StandardSignal) -> Any:
-        """路由到战术层"""
-        # 这里应该调用战术适配器
-        await asyncio.sleep(0.01)  # 模拟处理时间
-        return {"allocation": signal.data, "constraints": {"max_position": 0.1}}
+    async def _route_to_strategy_layer(self, signal: StandardSignal) -> Any:
+        """路由到策略层"""
+        try:
+            if not self._strategy_adapter:
+                raise SignalRouterException("StrategyAdapter not initialized")
+
+            # 从信号中提取股票代码和组合指令
+            symbols = self._extract_symbols_from_signal(signal)
+            portfolio_instruction = signal.data
+
+            # 调用真实的StrategyAdapter进行策略分析
+            logger.debug(f"Routing signal {signal.signal_id} to strategy layer with {len(symbols)} symbols")
+            analysis_results = await self._strategy_adapter.request_strategy_analysis(portfolio_instruction, symbols)
+
+            logger.debug(f"Strategy layer routing completed for signal {signal.signal_id}")
+            return analysis_results
+
+        except Exception as e:
+            logger.error(f"Strategy layer routing failed for signal {signal.signal_id}: {e}")
+            # 返回默认结果以保持信号流继续
+            return {"allocation": signal.data, "constraints": {"max_position": 0.1}, "error": str(e)}
     
     async def _process_signal_batch(self, batch: List[Any]) -> List[Any]:
         """处理信号批次"""
@@ -390,6 +444,18 @@ class SignalRouter(ISignalRouter):
                 processed.append(processed_signal)
             except Exception as e:
                 logger.warning(f"Failed to process signal: {e}")
+        return processed
+
+    async def _process_result_batch(self, batch: List[Any]) -> List[Any]:
+        """处理分析结果批次"""
+        processed = []
+        for result in batch:
+            try:
+                # 处理单个分析结果
+                processed_result = await self._signal_processor.process_analysis_result(result)
+                processed.append(processed_result)
+            except Exception as e:
+                logger.warning(f"Failed to process analysis result: {e}")
         return processed
     
     def _record_routing_result(self, result: SignalRoutingResult) -> None:
@@ -432,6 +498,54 @@ class SignalRouter(ISignalRouter):
         expiry_time = timedelta(seconds=self.config.signal_router.signal_expiry_time)
         
         # 清理历史记录中的过期信号
-        while (self._signal_history and 
+        while (self._signal_history and
                current_time - self._signal_history[0].timestamp > expiry_time):
             self._signal_history.popleft()
+
+    async def _initialize_strategy_adapter(self) -> None:
+        """初始化StrategyAdapter"""
+        try:
+            logger.info("Initializing StrategyAdapter in SignalRouter...")
+            self._strategy_adapter = StrategyAdapter(self.config)
+
+            # 连接到策略分析系统
+            connected = await self._strategy_adapter.connect_to_system()
+            if not connected:
+                raise SignalRouterException("Failed to connect to strategy analysis system")
+
+            logger.info("StrategyAdapter initialized and connected successfully in SignalRouter")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize StrategyAdapter in SignalRouter: {e}")
+            raise SignalRouterException(f"StrategyAdapter initialization failed: {e}")
+
+    def _extract_symbols_from_signal(self, signal: StandardSignal) -> List[str]:
+        """从信号中提取股票代码列表"""
+        symbols = []
+
+        if signal.data and isinstance(signal.data, dict):
+            # 尝试从不同字段提取股票代码
+            symbols.extend(signal.data.get('symbols', []))
+            symbols.extend(signal.data.get('target_symbols', []))
+
+            # 从权重配置中提取
+            weights = signal.data.get('weights', {})
+            if isinstance(weights, dict):
+                symbols.extend(weights.keys())
+
+            # 从持仓配置中提取
+            positions = signal.data.get('positions', {})
+            if isinstance(positions, dict):
+                symbols.extend(positions.keys())
+
+        # 去重并过滤有效的股票代码
+        unique_symbols = list(set(symbols))
+        valid_symbols = [s for s in unique_symbols if s and isinstance(s, str) and len(s) >= 6]
+
+        # 如果没有找到有效股票代码，使用默认测试代码
+        if not valid_symbols:
+            valid_symbols = ["000001.SZ", "000002.SZ", "600000.SH"]
+            logger.warning(f"No valid symbols found in signal {signal.signal_id}, using default: {valid_symbols}")
+
+        logger.debug(f"Extracted symbols from signal {signal.signal_id}: {valid_symbols}")
+        return valid_symbols

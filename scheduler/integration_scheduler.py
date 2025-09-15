@@ -213,11 +213,34 @@ class IntegrationScheduler:
         """触发每日数据抓取"""
         try:
             logger.info("Triggering daily data fetch...")
-            
-            # 这里应该调用flowhub服务进行数据抓取
-            # 暂时记录日志
-            self._record_task_execution("daily_data_fetch", "completed", "Daily data fetch triggered")
-            
+
+            # 获取FlowhubAdapter实例
+            flowhub_adapter = await self._get_flowhub_adapter()
+
+            if flowhub_adapter:
+                # 创建每日数据抓取任务
+                job_result = await flowhub_adapter.create_daily_data_fetch_job(
+                    symbols=None,  # None表示抓取所有股票
+                    incremental=True  # 使用增量更新
+                )
+
+                job_id = job_result.get('job_id')
+                logger.info(f"Daily data fetch job created: {job_id}")
+
+                # 记录任务执行成功
+                self._record_task_execution(
+                    "daily_data_fetch",
+                    "completed",
+                    f"Daily data fetch job created: {job_id}"
+                )
+
+                # 可选：等待任务完成（对于定时任务，通常不等待）
+                # result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
+
+            else:
+                logger.warning("FlowhubAdapter not available, skipping data fetch")
+                self._record_task_execution("daily_data_fetch", "skipped", "FlowhubAdapter not available")
+
         except Exception as e:
             logger.error(f"Daily data fetch failed: {e}")
             self._record_task_execution("daily_data_fetch", "failed", str(e))
@@ -237,6 +260,32 @@ class IntegrationScheduler:
         except Exception as e:
             logger.error(f"Analysis cycle failed: {e}")
             self._record_task_execution("full_analysis_cycle", "failed", str(e))
+
+    async def _get_flowhub_adapter(self):
+        """获取FlowhubAdapter实例
+
+        Returns:
+            FlowhubAdapter: FlowhubAdapter实例，如果不可用则返回None
+        """
+        try:
+            from ..adapters import FlowhubAdapter
+
+            # 创建FlowhubAdapter实例
+            flowhub_adapter = FlowhubAdapter(self.config)
+
+            # 连接到Flowhub服务
+            connected = await flowhub_adapter.connect_to_system()
+
+            if connected:
+                logger.debug("FlowhubAdapter connected successfully")
+                return flowhub_adapter
+            else:
+                logger.warning("Failed to connect FlowhubAdapter")
+                return None
+
+        except Exception as e:
+            logger.error(f"Failed to get FlowhubAdapter: {e}")
+            return None
     
     async def _system_health_check(self):
         """系统健康检查"""

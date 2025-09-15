@@ -20,9 +20,11 @@ from ..models import (
 )
 from ..config import IntegrationConfig
 from ..exceptions import (
-    SystemCoordinatorException, CycleExecutionException, 
+    SystemCoordinatorException, CycleExecutionException,
     ResourceAllocationException, handle_exception
 )
+from ..adapters.strategy_adapter import StrategyAdapter
+from ..managers.data_flow_manager import DataFlowManager
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +50,7 @@ class SystemCoordinator(ISystemCoordinator):
             overall_health=SystemHealthStatus.HEALTHY,
             macro_system_status=SystemHealthStatus.HEALTHY,
             portfolio_system_status=SystemHealthStatus.HEALTHY,
-            tactical_system_status=SystemHealthStatus.HEALTHY,
+            strategy_system_status=SystemHealthStatus.HEALTHY,
             data_pipeline_status=SystemHealthStatus.HEALTHY,
             last_update_time=datetime.now()
         )
@@ -65,7 +67,13 @@ class SystemCoordinator(ISystemCoordinator):
         # 锁和同步
         self._cycle_lock = threading.RLock()
         self._resource_lock = threading.RLock()
-        
+
+        # 适配器实例
+        self._strategy_adapter: Optional[StrategyAdapter] = None
+
+        # 管理器实例
+        self._data_flow_manager: Optional[DataFlowManager] = None
+
         # 监控任务
         self._monitoring_task: Optional[asyncio.Task] = None
         
@@ -82,11 +90,17 @@ class SystemCoordinator(ISystemCoordinator):
                 logger.warning("SystemCoordinator is already running")
                 return True
             
+            # 初始化StrategyAdapter
+            await self._initialize_strategy_adapter()
+
+            # 初始化DataFlowManager
+            await self._initialize_data_flow_manager()
+
             # 启动系统
             startup_success = await self.coordinate_system_startup()
             if not startup_success:
                 raise SystemCoordinatorException("Failed to start system")
-            
+
             # 分配初始资源
             await self.allocate_system_resources()
             
@@ -133,7 +147,15 @@ class SystemCoordinator(ISystemCoordinator):
             
             # 关闭线程池
             self._executor.shutdown(wait=True)
-            
+
+            # 停止数据流管理器
+            if self._data_flow_manager:
+                try:
+                    await self._data_flow_manager.stop()
+                    logger.info("DataFlowManager stopped")
+                except Exception as e:
+                    logger.warning(f"Error stopping DataFlowManager: {e}")
+
             # 协调系统关闭
             await self.coordinate_system_shutdown()
             
@@ -180,13 +202,13 @@ class SystemCoordinator(ISystemCoordinator):
             portfolio_instruction = await self._execute_portfolio_management(cycle_id, macro_state)
             cycle_result.portfolio_instruction = portfolio_instruction
             
-            # 阶段3: 战术分析
-            trading_signals = await self._execute_tactical_analysis(cycle_id, portfolio_instruction)
-            cycle_result.trading_signals = trading_signals
-            
-            # 阶段4: 验证和执行
-            execution_result = await self._execute_validation_and_execution(cycle_id, trading_signals)
-            cycle_result.execution_result = execution_result
+            # 阶段3: 策略分析
+            analysis_results = await self._execute_strategy_analysis(cycle_id, portfolio_instruction)
+            cycle_result.analysis_results = analysis_results
+
+            # 阶段4: 策略验证
+            validation_result = await self._execute_strategy_validation(cycle_id, analysis_results)
+            cycle_result.validation_result = validation_result
             
             # 完成周期
             cycle_result.end_time = datetime.now()
@@ -239,15 +261,15 @@ class SystemCoordinator(ISystemCoordinator):
             health_checks = await asyncio.gather(
                 self._check_macro_system_health(),
                 self._check_portfolio_system_health(),
-                self._check_tactical_system_health(),
+                self._check_strategy_system_health(),
                 self._check_data_pipeline_health(),
                 return_exceptions=True
             )
-            
+
             # 更新系统状态
             self._system_status.macro_system_status = health_checks[0] if not isinstance(health_checks[0], Exception) else SystemHealthStatus.CRITICAL
             self._system_status.portfolio_system_status = health_checks[1] if not isinstance(health_checks[1], Exception) else SystemHealthStatus.CRITICAL
-            self._system_status.tactical_system_status = health_checks[2] if not isinstance(health_checks[2], Exception) else SystemHealthStatus.CRITICAL
+            self._system_status.strategy_system_status = health_checks[2] if not isinstance(health_checks[2], Exception) else SystemHealthStatus.CRITICAL
             self._system_status.data_pipeline_status = health_checks[3] if not isinstance(health_checks[3], Exception) else SystemHealthStatus.CRITICAL
             
             # 计算整体健康状态
@@ -281,7 +303,7 @@ class SystemCoordinator(ISystemCoordinator):
             await asyncio.gather(
                 self._notify_macro_system_shutdown(),
                 self._notify_portfolio_system_shutdown(),
-                self._notify_tactical_system_shutdown(),
+                self._notify_strategy_system_shutdown(),
                 return_exceptions=True
             )
             
@@ -379,39 +401,105 @@ class SystemCoordinator(ISystemCoordinator):
     async def _execute_macro_analysis(self, cycle_id: str) -> Any:
         """执行宏观分析阶段"""
         try:
-            # 这里应该调用宏观适配器
-            # 暂时返回模拟结果
-            await asyncio.sleep(0.1)  # 模拟处理时间
-            return {"cycle_phase": "expansion", "risk_level": 0.3}
+            # 获取宏观适配器
+            if not hasattr(self, '_macro_adapter') or self._macro_adapter is None:
+                from ..adapters.macro_adapter import MacroAdapter
+                self._macro_adapter = MacroAdapter(self.config)
+                await self._macro_adapter.connect_to_system()
+
+            # 调用真实的宏观分析
+            logger.info(f"Executing macro analysis for cycle: {cycle_id}")
+
+            # 获取当前宏观状态
+            macro_state = await self._macro_adapter.get_macro_state()
+
+            # 如果需要触发新的分析，可以调用
+            # analysis_result = await self._macro_adapter.trigger_macro_analysis()
+
+            logger.info(f"Macro analysis completed for cycle: {cycle_id}")
+            return macro_state
+
         except Exception as e:
+            logger.error(f"Macro analysis failed for cycle {cycle_id}: {e}")
             raise CycleExecutionException(cycle_id, "macro_analysis", str(e))
     
     async def _execute_portfolio_management(self, cycle_id: str, macro_state: Any) -> Any:
         """执行组合管理阶段"""
         try:
-            # 这里应该调用组合适配器
-            await asyncio.sleep(0.1)  # 模拟处理时间
-            return {"target_position": 0.8, "sector_weights": {"tech": 0.4, "finance": 0.3}}
+            # 获取组合适配器
+            if not hasattr(self, '_portfolio_adapter') or self._portfolio_adapter is None:
+                from ..adapters.portfolio_adapter import PortfolioAdapter
+                from ..config import IntegrationConfig
+
+                # 使用默认配置或从现有配置获取
+                config = getattr(self, 'config', IntegrationConfig())
+                self._portfolio_adapter = PortfolioAdapter(config)
+                await self._portfolio_adapter.connect_to_system()
+
+            # 构造组合优化请求
+            optimization_request = {
+                'type': 'portfolio_optimization',
+                'macro_state': macro_state,
+                'constraints': {
+                    'max_sector_weight': 0.35,
+                    'max_single_stock': 0.05,
+                    'var_limit': 0.02
+                },
+                'cycle_id': cycle_id
+            }
+
+            # 执行组合优化
+            result = await self._portfolio_adapter.request_portfolio_optimization(
+                macro_state, optimization_request.get('constraints', {})
+            )
+
+            logger.info(f"Portfolio management completed for cycle {cycle_id}")
+            return result
+
         except Exception as e:
+            logger.error(f"Portfolio management failed for cycle {cycle_id}: {e}")
             raise CycleExecutionException(cycle_id, "portfolio_management", str(e))
     
-    async def _execute_tactical_analysis(self, cycle_id: str, portfolio_instruction: Any) -> List[Any]:
-        """执行战术分析阶段"""
+    async def _execute_strategy_analysis(self, cycle_id: str, portfolio_instruction: Any) -> List[Any]:
+        """执行策略分析阶段"""
         try:
-            # 这里应该调用战术适配器
-            await asyncio.sleep(0.1)  # 模拟处理时间
-            return [{"symbol": "000001.SZ", "signal": "buy", "strength": 0.8}]
+            if not self._strategy_adapter:
+                raise CycleExecutionException(cycle_id, "strategy_analysis", "StrategyAdapter not initialized")
+
+            # 从组合指令中提取股票代码
+            symbols = self._extract_symbols_from_instruction(portfolio_instruction)
+
+            # 调用真实的StrategyAdapter进行策略分析
+            logger.info(f"Executing strategy analysis for cycle {cycle_id} with {len(symbols)} symbols")
+            analysis_results = await self._strategy_adapter.request_strategy_analysis(portfolio_instruction, symbols)
+
+            logger.info(f"Strategy analysis completed for cycle {cycle_id}, got {len(analysis_results)} results")
+            return analysis_results
+
         except Exception as e:
-            raise CycleExecutionException(cycle_id, "tactical_analysis", str(e))
+            logger.error(f"Strategy analysis failed for cycle {cycle_id}: {e}")
+            raise CycleExecutionException(cycle_id, "strategy_analysis", str(e))
     
-    async def _execute_validation_and_execution(self, cycle_id: str, trading_signals: List[Any]) -> Any:
-        """执行验证和执行阶段"""
+    async def _execute_strategy_validation(self, cycle_id: str, analysis_results: List[Any]) -> Any:
+        """执行策略验证阶段"""
         try:
-            # 这里应该调用验证协调器和执行引擎
-            await asyncio.sleep(0.1)  # 模拟处理时间
-            return {"executed_orders": len(trading_signals), "success_rate": 0.95}
+            if not self._strategy_adapter:
+                raise CycleExecutionException(cycle_id, "strategy_validation", "StrategyAdapter not initialized")
+
+            # 从分析结果中提取股票代码和构建策略配置
+            symbols = [result.get('symbol') for result in analysis_results if result.get('symbol')]
+            strategy_config = self._build_strategy_config_from_results(analysis_results)
+
+            # 调用真实的StrategyAdapter进行回测验证
+            logger.info(f"Executing strategy validation for cycle {cycle_id} with {len(symbols)} symbols")
+            validation_result = await self._strategy_adapter.request_backtest_validation(symbols, strategy_config)
+
+            logger.info(f"Strategy validation completed for cycle {cycle_id}")
+            return validation_result
+
         except Exception as e:
-            raise CycleExecutionException(cycle_id, "validation_execution", str(e))
+            logger.error(f"Strategy validation failed for cycle {cycle_id}: {e}")
+            raise CycleExecutionException(cycle_id, "strategy_validation", str(e))
 
     async def _wait_for_active_cycles(self) -> None:
         """等待活跃周期完成"""
@@ -469,7 +557,7 @@ class SystemCoordinator(ISystemCoordinator):
             health_checks = await asyncio.gather(
                 self._check_macro_system_health(),
                 self._check_portfolio_system_health(),
-                self._check_tactical_system_health(),
+                self._check_strategy_system_health(),
                 self._check_data_pipeline_health(),
                 return_exceptions=True
             )
@@ -477,7 +565,7 @@ class SystemCoordinator(ISystemCoordinator):
             # 更新状态
             self._system_status.macro_system_status = health_checks[0] if not isinstance(health_checks[0], Exception) else SystemHealthStatus.CRITICAL
             self._system_status.portfolio_system_status = health_checks[1] if not isinstance(health_checks[1], Exception) else SystemHealthStatus.CRITICAL
-            self._system_status.tactical_system_status = health_checks[2] if not isinstance(health_checks[2], Exception) else SystemHealthStatus.CRITICAL
+            self._system_status.strategy_system_status = health_checks[2] if not isinstance(health_checks[2], Exception) else SystemHealthStatus.CRITICAL
             self._system_status.data_pipeline_status = health_checks[3] if not isinstance(health_checks[3], Exception) else SystemHealthStatus.CRITICAL
 
             self._update_overall_health()
@@ -492,7 +580,7 @@ class SystemCoordinator(ISystemCoordinator):
         statuses = [
             self._system_status.macro_system_status,
             self._system_status.portfolio_system_status,
-            self._system_status.tactical_system_status,
+            self._system_status.strategy_system_status,
             self._system_status.data_pipeline_status
         ]
 
@@ -506,94 +594,370 @@ class SystemCoordinator(ISystemCoordinator):
     async def _check_macro_system_health(self) -> SystemHealthStatus:
         """检查宏观系统健康状态"""
         try:
-            # 这里应该调用宏观适配器的健康检查
-            await asyncio.sleep(0.01)  # 模拟检查时间
-            return SystemHealthStatus.HEALTHY
-        except Exception:
+            # 获取宏观适配器
+            if not hasattr(self, '_macro_adapter') or self._macro_adapter is None:
+                from ..adapters.macro_adapter import MacroAdapter
+                self._macro_adapter = MacroAdapter(self.config)
+                await self._macro_adapter.connect_to_system()
+
+            # 调用真实的健康检查
+            is_healthy = await self._macro_adapter.health_check()
+
+            if is_healthy:
+                logger.debug("Macro system health check passed")
+                return SystemHealthStatus.HEALTHY
+            else:
+                logger.warning("Macro system health check failed")
+                return SystemHealthStatus.DEGRADED
+
+        except Exception as e:
+            logger.error(f"Macro system health check error: {e}")
             return SystemHealthStatus.CRITICAL
 
     async def _check_portfolio_system_health(self) -> SystemHealthStatus:
         """检查组合系统健康状态"""
         try:
-            # 这里应该调用组合适配器的健康检查
-            await asyncio.sleep(0.01)  # 模拟检查时间
-            return SystemHealthStatus.HEALTHY
-        except Exception:
+            # 获取组合适配器
+            if not hasattr(self, '_portfolio_adapter') or self._portfolio_adapter is None:
+                from ..adapters.portfolio_adapter import PortfolioAdapter
+                from ..config import IntegrationConfig
+
+                config = getattr(self, 'config', IntegrationConfig())
+                self._portfolio_adapter = PortfolioAdapter(config)
+                await self._portfolio_adapter.connect_to_system()
+
+            # 执行真实的健康检查
+            health_result = await self._portfolio_adapter.health_check()
+
+            if health_result:
+                logger.debug("Portfolio system health check passed")
+                return SystemHealthStatus.HEALTHY
+            else:
+                logger.warning("Portfolio system health check failed")
+                return SystemHealthStatus.DEGRADED
+
+        except Exception as e:
+            logger.error(f"Portfolio system health check error: {e}")
             return SystemHealthStatus.CRITICAL
 
-    async def _check_tactical_system_health(self) -> SystemHealthStatus:
-        """检查战术系统健康状态"""
+    async def _check_strategy_system_health(self) -> SystemHealthStatus:
+        """检查策略系统健康状态"""
         try:
-            # 这里应该调用战术适配器的健康检查
-            await asyncio.sleep(0.01)  # 模拟检查时间
-            return SystemHealthStatus.HEALTHY
-        except Exception:
+            if not self._strategy_adapter:
+                logger.warning("StrategyAdapter not initialized, returning CRITICAL status")
+                return SystemHealthStatus.CRITICAL
+
+            # 调用真实的StrategyAdapter健康检查
+            is_healthy = await self._strategy_adapter.health_check()
+            status = SystemHealthStatus.HEALTHY if is_healthy else SystemHealthStatus.CRITICAL
+
+            logger.debug(f"Strategy system health check result: {status}")
+            return status
+
+        except Exception as e:
+            logger.error(f"Strategy system health check error: {e}")
             return SystemHealthStatus.CRITICAL
 
     async def _check_data_pipeline_health(self) -> SystemHealthStatus:
         """检查数据管道健康状态"""
         try:
-            # 这里应该调用数据流管理器的健康检查
-            await asyncio.sleep(0.01)  # 模拟检查时间
-            return SystemHealthStatus.HEALTHY
-        except Exception:
+            # 检查数据流管理器是否已初始化
+            if self._data_flow_manager is None:
+                logger.warning("DataFlowManager not initialized, attempting to initialize...")
+                await self._initialize_data_flow_manager()
+                if self._data_flow_manager is None:
+                    return SystemHealthStatus.CRITICAL
+
+            # 检查数据流管理器是否运行
+            if not self._data_flow_manager.is_running():
+                logger.warning("DataFlowManager is not running, attempting to start...")
+                if not await self._data_flow_manager.start():
+                    return SystemHealthStatus.CRITICAL
+
+            # 执行数据管道健康检查
+            logger.debug("Performing data pipeline health check...")
+
+            # 1. 检查数据源健康状态
+            data_sources_health = await self._check_data_sources_health()
+
+            # 2. 检查数据质量
+            data_quality_status = await self._check_data_quality()
+
+            # 3. 检查数据流状态
+            data_flow_status = await self._data_flow_manager.get_data_flow_status()
+
+            # 4. 检查缓存状态
+            cache_health = await self._check_cache_health()
+
+            # 综合评估健康状态
+            health_scores = []
+
+            # 数据源健康评分
+            if data_sources_health['healthy_sources'] == 0:
+                health_scores.append(0.0)  # 没有健康数据源
+            else:
+                source_ratio = data_sources_health['healthy_sources'] / data_sources_health['total_sources']
+                health_scores.append(source_ratio)
+
+            # 数据质量评分
+            if data_quality_status['overall_quality'] >= 0.8:
+                health_scores.append(1.0)
+            elif data_quality_status['overall_quality'] >= 0.6:
+                health_scores.append(0.7)
+            elif data_quality_status['overall_quality'] >= 0.4:
+                health_scores.append(0.5)
+            else:
+                health_scores.append(0.2)
+
+            # 数据流状态评分
+            if data_flow_status and data_flow_status.status == 'healthy':
+                health_scores.append(1.0)
+            elif data_flow_status and data_flow_status.status == 'degraded':
+                health_scores.append(0.6)
+            else:
+                health_scores.append(0.2)
+
+            # 缓存健康评分
+            if cache_health['hit_rate'] >= 0.8:
+                health_scores.append(1.0)
+            elif cache_health['hit_rate'] >= 0.6:
+                health_scores.append(0.8)
+            else:
+                health_scores.append(0.5)
+
+            # 计算综合健康评分
+            overall_score = sum(health_scores) / len(health_scores) if health_scores else 0.0
+
+            # 根据评分确定健康状态
+            if overall_score >= 0.8:
+                status = SystemHealthStatus.HEALTHY
+            elif overall_score >= 0.6:
+                status = SystemHealthStatus.DEGRADED
+            elif overall_score >= 0.3:
+                status = SystemHealthStatus.WARNING
+            else:
+                status = SystemHealthStatus.CRITICAL
+
+            logger.info(f"Data pipeline health check completed: score={overall_score:.3f}, status={status}")
+            return status
+
+        except Exception as e:
+            logger.error(f"Data pipeline health check failed: {e}")
             return SystemHealthStatus.CRITICAL
+
+    async def _check_data_sources_health(self) -> Dict[str, Any]:
+        """检查数据源健康状态"""
+        try:
+            # 定义需要检查的数据源
+            data_sources = [
+                'market_data',
+                'macro_data',
+                'portfolio_data',
+                'execution_data'
+            ]
+
+            healthy_sources = 0
+            source_details = {}
+
+            for source in data_sources:
+                try:
+                    # 使用策略适配器检查数据源连接
+                    if self._strategy_adapter:
+                        health_check = await self._strategy_adapter.health_check()
+                        if health_check:
+                            healthy_sources += 1
+                            source_details[source] = {'status': 'healthy', 'last_update': datetime.now().isoformat()}
+                        else:
+                            source_details[source] = {'status': 'unhealthy', 'error': 'Connection failed'}
+                    else:
+                        source_details[source] = {'status': 'unknown', 'error': 'Adapter not available'}
+
+                except Exception as e:
+                    source_details[source] = {'status': 'error', 'error': str(e)}
+
+            return {
+                'total_sources': len(data_sources),
+                'healthy_sources': healthy_sources,
+                'source_details': source_details,
+                'health_ratio': healthy_sources / len(data_sources) if data_sources else 0.0
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to check data sources health: {e}")
+            return {
+                'total_sources': 0,
+                'healthy_sources': 0,
+                'source_details': {},
+                'health_ratio': 0.0,
+                'error': str(e)
+            }
+
+    async def _check_data_quality(self) -> Dict[str, Any]:
+        """检查数据质量"""
+        try:
+            if self._data_flow_manager:
+                # 使用数据流管理器的数据质量监控
+                quality_report = await self._data_flow_manager.monitor_data_quality()
+
+                if quality_report:
+                    return {
+                        'overall_quality': quality_report.get('overall_score', 0.5),
+                        'completeness': quality_report.get('completeness', 0.5),
+                        'accuracy': quality_report.get('accuracy', 0.5),
+                        'timeliness': quality_report.get('timeliness', 0.5),
+                        'consistency': quality_report.get('consistency', 0.5),
+                        'last_check': datetime.now().isoformat()
+                    }
+
+            # 如果数据流管理器不可用，返回默认质量评估
+            return {
+                'overall_quality': 0.7,  # 假设中等质量
+                'completeness': 0.8,
+                'accuracy': 0.7,
+                'timeliness': 0.6,
+                'consistency': 0.7,
+                'last_check': datetime.now().isoformat(),
+                'note': 'Default quality assessment - DataFlowManager unavailable'
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to check data quality: {e}")
+            return {
+                'overall_quality': 0.3,  # 低质量评分
+                'completeness': 0.0,
+                'accuracy': 0.0,
+                'timeliness': 0.0,
+                'consistency': 0.0,
+                'last_check': datetime.now().isoformat(),
+                'error': str(e)
+            }
+
+    async def _check_cache_health(self) -> Dict[str, Any]:
+        """检查缓存健康状态"""
+        try:
+            if self._data_flow_manager:
+                # 获取缓存统计信息
+                cache_stats = await self._data_flow_manager.get_cache_statistics()
+
+                if cache_stats:
+                    hit_rate = cache_stats.get('hit_rate', 0.0)
+                    return {
+                        'hit_rate': hit_rate,
+                        'total_requests': cache_stats.get('total_requests', 0),
+                        'cache_hits': cache_stats.get('cache_hits', 0),
+                        'cache_misses': cache_stats.get('cache_misses', 0),
+                        'cache_size': cache_stats.get('cache_size', 0),
+                        'memory_usage': cache_stats.get('memory_usage', 0),
+                        'last_check': datetime.now().isoformat()
+                    }
+
+            # 如果数据流管理器不可用，返回默认缓存状态
+            return {
+                'hit_rate': 0.6,  # 假设中等缓存命中率
+                'total_requests': 0,
+                'cache_hits': 0,
+                'cache_misses': 0,
+                'cache_size': 0,
+                'memory_usage': 0,
+                'last_check': datetime.now().isoformat(),
+                'note': 'Default cache assessment - DataFlowManager unavailable'
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to check cache health: {e}")
+            return {
+                'hit_rate': 0.2,  # 低缓存命中率
+                'total_requests': 0,
+                'cache_hits': 0,
+                'cache_misses': 0,
+                'cache_size': 0,
+                'memory_usage': 0,
+                'last_check': datetime.now().isoformat(),
+                'error': str(e)
+            }
+
+    async def _initialize_data_flow_manager(self) -> None:
+        """初始化数据流管理器"""
+        try:
+            logger.info("Initializing DataFlowManager...")
+            self._data_flow_manager = DataFlowManager(self.config)
+
+            # 启动数据流管理器
+            if not await self._data_flow_manager.start():
+                logger.error("Failed to start DataFlowManager")
+                self._data_flow_manager = None
+                return
+
+            logger.info("DataFlowManager initialized and started successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize DataFlowManager: {e}")
+            self._data_flow_manager = None
 
     async def _notify_macro_system_shutdown(self) -> None:
         """通知宏观系统准备关闭"""
         try:
-            # 这里应该通知宏观适配器
-            await asyncio.sleep(0.01)
+            # 断开宏观适配器连接
+            if hasattr(self, '_macro_adapter') and self._macro_adapter is not None:
+                await self._macro_adapter.disconnect_from_system()
+                logger.info("Macro system shutdown notification sent")
         except Exception as e:
             logger.error(f"Failed to notify macro system shutdown: {e}")
 
     async def _notify_portfolio_system_shutdown(self) -> None:
         """通知组合系统准备关闭"""
         try:
-            # 这里应该通知组合适配器
-            await asyncio.sleep(0.01)
+            # 通知组合适配器断开连接
+            if hasattr(self, '_portfolio_adapter') and self._portfolio_adapter is not None:
+                await self._portfolio_adapter.disconnect_from_system()
+                logger.info("Portfolio system shutdown notification sent")
         except Exception as e:
             logger.error(f"Failed to notify portfolio system shutdown: {e}")
 
-    async def _notify_tactical_system_shutdown(self) -> None:
-        """通知战术系统准备关闭"""
+    async def _notify_strategy_system_shutdown(self) -> None:
+        """通知策略系统准备关闭"""
         try:
-            # 这里应该通知战术适配器
-            await asyncio.sleep(0.01)
+            if self._strategy_adapter:
+                logger.info("Disconnecting from strategy analysis system...")
+                await self._strategy_adapter.disconnect_from_system()
+                self._strategy_adapter = None
+                logger.info("Strategy system shutdown notification completed")
+            else:
+                logger.debug("StrategyAdapter not initialized, skipping shutdown notification")
         except Exception as e:
-            logger.error(f"Failed to notify tactical system shutdown: {e}")
+            logger.error(f"Failed to notify strategy system shutdown: {e}")
 
     def _create_balanced_allocation(self, allocation_id: str) -> ResourceAllocation:
         """创建平衡资源分配"""
         return ResourceAllocation(
             allocation_id=allocation_id,
-            cpu_allocation={"macro": 0.3, "portfolio": 0.4, "tactical": 0.3},
-            memory_allocation={"macro": 0.2, "portfolio": 0.3, "tactical": 0.5},
-            network_allocation={"macro": 0.3, "portfolio": 0.3, "tactical": 0.4},
-            storage_allocation={"macro": 0.2, "portfolio": 0.3, "tactical": 0.5},
-            priority_weights={"macro": 0.3, "portfolio": 0.4, "tactical": 0.3}
+            cpu_allocation={"macro": 0.3, "portfolio": 0.4, "strategy": 0.3},
+            memory_allocation={"macro": 0.2, "portfolio": 0.3, "strategy": 0.5},
+            network_allocation={"macro": 0.3, "portfolio": 0.3, "strategy": 0.4},
+            storage_allocation={"macro": 0.2, "portfolio": 0.3, "strategy": 0.5},
+            priority_weights={"macro": 0.3, "portfolio": 0.4, "strategy": 0.3}
         )
 
     def _create_performance_allocation(self, allocation_id: str) -> ResourceAllocation:
         """创建性能优先资源分配"""
         return ResourceAllocation(
             allocation_id=allocation_id,
-            cpu_allocation={"macro": 0.2, "portfolio": 0.3, "tactical": 0.5},
-            memory_allocation={"macro": 0.15, "portfolio": 0.25, "tactical": 0.6},
-            network_allocation={"macro": 0.2, "portfolio": 0.3, "tactical": 0.5},
-            storage_allocation={"macro": 0.15, "portfolio": 0.25, "tactical": 0.6},
-            priority_weights={"macro": 0.2, "portfolio": 0.3, "tactical": 0.5}
+            cpu_allocation={"macro": 0.2, "portfolio": 0.3, "strategy": 0.5},
+            memory_allocation={"macro": 0.15, "portfolio": 0.25, "strategy": 0.6},
+            network_allocation={"macro": 0.2, "portfolio": 0.3, "strategy": 0.5},
+            storage_allocation={"macro": 0.15, "portfolio": 0.25, "strategy": 0.6},
+            priority_weights={"macro": 0.2, "portfolio": 0.3, "strategy": 0.5}
         )
 
     def _create_conservative_allocation(self, allocation_id: str) -> ResourceAllocation:
         """创建保守资源分配"""
         return ResourceAllocation(
             allocation_id=allocation_id,
-            cpu_allocation={"macro": 0.4, "portfolio": 0.4, "tactical": 0.2},
-            memory_allocation={"macro": 0.3, "portfolio": 0.4, "tactical": 0.3},
-            network_allocation={"macro": 0.4, "portfolio": 0.4, "tactical": 0.2},
-            storage_allocation={"macro": 0.3, "portfolio": 0.4, "tactical": 0.3},
-            priority_weights={"macro": 0.4, "portfolio": 0.4, "tactical": 0.2}
+            cpu_allocation={"macro": 0.4, "portfolio": 0.4, "strategy": 0.2},
+            memory_allocation={"macro": 0.3, "portfolio": 0.4, "strategy": 0.3},
+            network_allocation={"macro": 0.4, "portfolio": 0.4, "strategy": 0.2},
+            storage_allocation={"macro": 0.3, "portfolio": 0.4, "strategy": 0.3},
+            priority_weights={"macro": 0.4, "portfolio": 0.4, "strategy": 0.2}
         )
 
     async def _attempt_auto_recovery(self, exception) -> bool:
@@ -606,3 +970,83 @@ class SystemCoordinator(ISystemCoordinator):
         except Exception as e:
             logger.error(f"Auto recovery failed: {e}")
             return False
+
+    async def _initialize_strategy_adapter(self) -> None:
+        """初始化StrategyAdapter"""
+        try:
+            logger.info("Initializing StrategyAdapter...")
+            self._strategy_adapter = StrategyAdapter(self.config)
+
+            # 连接到策略分析系统
+            connected = await self._strategy_adapter.connect_to_system()
+            if not connected:
+                raise SystemCoordinatorException("Failed to connect to strategy analysis system")
+
+            logger.info("StrategyAdapter initialized and connected successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize StrategyAdapter: {e}")
+            raise SystemCoordinatorException(f"StrategyAdapter initialization failed: {e}")
+
+    def _extract_symbols_from_instruction(self, portfolio_instruction: Dict[str, Any]) -> List[str]:
+        """从组合指令中提取股票代码列表"""
+        # 从组合指令中提取股票代码
+        symbols = []
+
+        if isinstance(portfolio_instruction, dict):
+            # 尝试从不同字段提取股票代码
+            symbols.extend(portfolio_instruction.get('symbols', []))
+            symbols.extend(portfolio_instruction.get('target_symbols', []))
+
+            # 从权重配置中提取
+            weights = portfolio_instruction.get('weights', {})
+            if isinstance(weights, dict):
+                symbols.extend(weights.keys())
+
+            # 从持仓配置中提取
+            positions = portfolio_instruction.get('positions', {})
+            if isinstance(positions, dict):
+                symbols.extend(positions.keys())
+
+        # 去重并过滤有效的股票代码
+        unique_symbols = list(set(symbols))
+        valid_symbols = [s for s in unique_symbols if s and isinstance(s, str) and len(s) >= 6]
+
+        # 如果没有找到有效股票代码，使用默认测试代码
+        if not valid_symbols:
+            valid_symbols = ["000001.SZ", "000002.SZ", "600000.SH"]
+            logger.warning(f"No valid symbols found in portfolio instruction, using default: {valid_symbols}")
+
+        logger.debug(f"Extracted symbols from portfolio instruction: {valid_symbols}")
+        return valid_symbols
+
+    def _build_strategy_config_from_results(self, analysis_results: List[Any]) -> Dict[str, Any]:
+        """从分析结果构建策略配置"""
+        if not analysis_results:
+            return {
+                'analyzers': ['livermore', 'multi_indicator'],
+                'start_date': '2023-01-01',
+                'end_date': '2023-12-31',
+                'initial_capital': 1000000,
+                'commission': 0.001
+            }
+
+        # 从分析结果中提取分析器信息
+        analyzers = set()
+        for result in analysis_results:
+            if isinstance(result, dict):
+                analyzer_scores = result.get('analyzer_scores', {})
+                analyzers.update(analyzer_scores.keys())
+
+        # 如果没有找到分析器，使用默认配置
+        if not analyzers:
+            analyzers = {'livermore', 'multi_indicator'}
+
+        return {
+            'analyzers': list(analyzers),
+            'start_date': '2023-01-01',
+            'end_date': '2023-12-31',
+            'initial_capital': 1000000,
+            'commission': 0.001,
+            'weights': {analyzer: 1.0/len(analyzers) for analyzer in analyzers}
+        }

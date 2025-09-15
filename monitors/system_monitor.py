@@ -68,15 +68,38 @@ class SystemMonitor:
             'data_flow_manager': {'status': 'unknown', 'last_check': None},
             'macro_adapter': {'status': 'unknown', 'last_check': None},
             'portfolio_adapter': {'status': 'unknown', 'last_check': None},
-            'tactical_adapter': {'status': 'unknown', 'last_check': None}
+            'strategy_adapter': {'status': 'unknown', 'last_check': None}
         }
         
         # 监控任务
         self._monitoring_task: Optional[asyncio.Task] = None
         self._performance_task: Optional[asyncio.Task] = None
-        
+
+        # 组件引用（在启动时设置）
+        self._system_coordinator = None
+        self._signal_router = None
+        self._data_flow_manager = None
+        self._strategy_adapter = None
+        self._portfolio_adapter = None
+        self._macro_adapter = None
+
         logger.info("SystemMonitor initialized")
-    
+
+    def set_component_references(self, **components):
+        """设置组件引用
+
+        Args:
+            **components: 组件实例的关键字参数
+        """
+        self._system_coordinator = components.get('system_coordinator')
+        self._signal_router = components.get('signal_router')
+        self._data_flow_manager = components.get('data_flow_manager')
+        self._strategy_adapter = components.get('strategy_adapter')
+        self._portfolio_adapter = components.get('portfolio_adapter')
+        self._macro_adapter = components.get('macro_adapter')
+
+        logger.info("Component references set for SystemMonitor")
+
     async def start(self) -> bool:
         """启动系统监控器
         
@@ -158,7 +181,7 @@ class SystemMonitor:
             # 更新系统状态
             self._current_system_status.macro_system_status = component_health.get('macro_adapter', SystemHealthStatus.CRITICAL)
             self._current_system_status.portfolio_system_status = component_health.get('portfolio_adapter', SystemHealthStatus.CRITICAL)
-            self._current_system_status.tactical_system_status = component_health.get('tactical_adapter', SystemHealthStatus.CRITICAL)
+            self._current_system_status.strategy_system_status = component_health.get('strategy_adapter', SystemHealthStatus.CRITICAL)
             self._current_system_status.data_pipeline_status = component_health.get('data_flow_manager', SystemHealthStatus.CRITICAL)
             
             # 计算整体健康状态
@@ -338,7 +361,7 @@ class SystemMonitor:
         
         for component_name in self._component_status.keys():
             try:
-                # 模拟组件健康检查
+                # 执行真实的组件健康检查
                 health_status = await self._check_component_health(component_name)
                 component_health[component_name] = health_status
                 
@@ -360,13 +383,184 @@ class SystemMonitor:
     
     async def _check_component_health(self, component_name: str) -> SystemHealthStatus:
         """检查单个组件健康状态"""
-        # 模拟组件健康检查
-        await asyncio.sleep(0.01)
-        
-        # 这里应该实际调用各组件的健康检查接口
-        # 现在返回模拟结果
-        return SystemHealthStatus.HEALTHY
-    
+        try:
+            logger.debug(f"Checking health of component: {component_name}")
+
+            # 根据组件名称执行相应的健康检查
+            if component_name == 'system_coordinator':
+                return await self._check_system_coordinator_health()
+            elif component_name == 'signal_router':
+                return await self._check_signal_router_health()
+            elif component_name == 'data_flow_manager':
+                return await self._check_data_flow_manager_health()
+            elif component_name == 'strategy_adapter':
+                return await self._check_strategy_adapter_health()
+            elif component_name == 'portfolio_adapter':
+                return await self._check_portfolio_adapter_health()
+            elif component_name == 'macro_adapter':
+                return await self._check_macro_adapter_health()
+            else:
+                logger.warning(f"Unknown component: {component_name}")
+                return SystemHealthStatus.WARNING
+
+        except Exception as e:
+            logger.error(f"Health check failed for component {component_name}: {e}")
+            return SystemHealthStatus.CRITICAL
+
+    async def _check_system_coordinator_health(self) -> SystemHealthStatus:
+        """检查系统协调器健康状态"""
+        try:
+            if self._system_coordinator is None:
+                return SystemHealthStatus.CRITICAL
+
+            # 检查系统协调器是否运行
+            if hasattr(self._system_coordinator, '_is_running') and not self._system_coordinator._is_running:
+                return SystemHealthStatus.CRITICAL
+
+            # 检查活跃周期数量
+            if hasattr(self._system_coordinator, '_active_cycles'):
+                active_cycles = len(self._system_coordinator._active_cycles)
+                max_cycles = getattr(self._system_coordinator.config.system_coordinator, 'max_concurrent_cycles', 10)
+
+                if active_cycles >= max_cycles:
+                    return SystemHealthStatus.WARNING
+                elif active_cycles > max_cycles * 0.8:
+                    return SystemHealthStatus.DEGRADED
+
+            return SystemHealthStatus.HEALTHY
+
+        except Exception as e:
+            logger.error(f"System coordinator health check failed: {e}")
+            return SystemHealthStatus.CRITICAL
+
+    async def _check_signal_router_health(self) -> SystemHealthStatus:
+        """检查信号路由器健康状态"""
+        try:
+            if self._signal_router is None:
+                return SystemHealthStatus.CRITICAL
+
+            # 检查信号路由器是否运行
+            if hasattr(self._signal_router, '_is_running') and not self._signal_router._is_running:
+                return SystemHealthStatus.CRITICAL
+
+            # 检查信号队列状态
+            if hasattr(self._signal_router, '_signal_queue'):
+                queue_size = self._signal_router._signal_queue.qsize()
+                max_queue_size = getattr(self._signal_router.config.signal_router, 'max_queue_size', 1000)
+
+                if queue_size >= max_queue_size:
+                    return SystemHealthStatus.CRITICAL
+                elif queue_size > max_queue_size * 0.8:
+                    return SystemHealthStatus.WARNING
+
+            return SystemHealthStatus.HEALTHY
+
+        except Exception as e:
+            logger.error(f"Signal router health check failed: {e}")
+            return SystemHealthStatus.CRITICAL
+
+    async def _check_data_flow_manager_health(self) -> SystemHealthStatus:
+        """检查数据流管理器健康状态"""
+        try:
+            if self._data_flow_manager is None:
+                return SystemHealthStatus.CRITICAL
+
+            # 检查数据流管理器是否运行
+            if hasattr(self._data_flow_manager, 'is_running') and not self._data_flow_manager.is_running():
+                return SystemHealthStatus.CRITICAL
+
+            # 检查数据流状态
+            if hasattr(self._data_flow_manager, 'get_data_flow_status'):
+                try:
+                    flow_status = await self._data_flow_manager.get_data_flow_status()
+                    if flow_status:
+                        if flow_status.status == 'healthy':
+                            return SystemHealthStatus.HEALTHY
+                        elif flow_status.status == 'degraded':
+                            return SystemHealthStatus.DEGRADED
+                        else:
+                            return SystemHealthStatus.WARNING
+                except Exception:
+                    pass
+
+            return SystemHealthStatus.HEALTHY
+
+        except Exception as e:
+            logger.error(f"Data flow manager health check failed: {e}")
+            return SystemHealthStatus.CRITICAL
+
+    async def _check_strategy_adapter_health(self) -> SystemHealthStatus:
+        """检查策略适配器健康状态"""
+        try:
+            if self._strategy_adapter is None:
+                return SystemHealthStatus.CRITICAL
+
+            # 检查适配器连接状态
+            if hasattr(self._strategy_adapter, 'health_check'):
+                health_ok = await self._strategy_adapter.health_check()
+                if health_ok:
+                    return SystemHealthStatus.HEALTHY
+                else:
+                    return SystemHealthStatus.CRITICAL
+
+            # 检查连接状态
+            if hasattr(self._strategy_adapter, '_is_connected') and not self._strategy_adapter._is_connected:
+                return SystemHealthStatus.CRITICAL
+
+            return SystemHealthStatus.HEALTHY
+
+        except Exception as e:
+            logger.error(f"Strategy adapter health check failed: {e}")
+            return SystemHealthStatus.CRITICAL
+
+    async def _check_portfolio_adapter_health(self) -> SystemHealthStatus:
+        """检查组合适配器健康状态"""
+        try:
+            if self._portfolio_adapter is None:
+                return SystemHealthStatus.WARNING  # 组合适配器可能是可选的
+
+            # 检查适配器连接状态
+            if hasattr(self._portfolio_adapter, 'health_check'):
+                health_ok = await self._portfolio_adapter.health_check()
+                if health_ok:
+                    return SystemHealthStatus.HEALTHY
+                else:
+                    return SystemHealthStatus.DEGRADED
+
+            # 检查连接状态
+            if hasattr(self._portfolio_adapter, '_is_connected') and not self._portfolio_adapter._is_connected:
+                return SystemHealthStatus.DEGRADED
+
+            return SystemHealthStatus.HEALTHY
+
+        except Exception as e:
+            logger.error(f"Portfolio adapter health check failed: {e}")
+            return SystemHealthStatus.DEGRADED
+
+    async def _check_macro_adapter_health(self) -> SystemHealthStatus:
+        """检查宏观适配器健康状态"""
+        try:
+            if self._macro_adapter is None:
+                return SystemHealthStatus.WARNING  # 宏观适配器可能是可选的
+
+            # 检查适配器连接状态
+            if hasattr(self._macro_adapter, 'health_check'):
+                health_ok = await self._macro_adapter.health_check()
+                if health_ok:
+                    return SystemHealthStatus.HEALTHY
+                else:
+                    return SystemHealthStatus.DEGRADED
+
+            # 检查连接状态
+            if hasattr(self._macro_adapter, '_is_connected') and not self._macro_adapter._is_connected:
+                return SystemHealthStatus.DEGRADED
+
+            return SystemHealthStatus.HEALTHY
+
+        except Exception as e:
+            logger.error(f"Macro adapter health check failed: {e}")
+            return SystemHealthStatus.DEGRADED
+
     def _update_overall_health_status(self) -> None:
         """更新整体健康状态"""
         component_statuses = [

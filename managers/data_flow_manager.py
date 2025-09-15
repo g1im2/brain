@@ -429,16 +429,245 @@ class DataFlowManager(IDataFlowManager):
     
     async def _optimize_data_flow_paths(self) -> None:
         """优化数据流路径"""
-        # 基于依赖关系优化数据流路径
-        # 这里实现简化的路径优化逻辑
-        pass
+        try:
+            logger.debug("Starting data flow path optimization...")
+
+            with self._flow_lock:
+                # 1. 构建依赖图
+                dependency_graph = await self._build_dependency_graph()
+
+                # 2. 检测循环依赖
+                circular_deps = await self._detect_circular_dependencies()
+                if circular_deps:
+                    logger.warning(f"Detected circular dependencies: {circular_deps}")
+                    await self._resolve_circular_dependencies(circular_deps)
+
+                # 3. 计算最优执行顺序
+                optimal_order = await self._calculate_optimal_execution_order(dependency_graph)
+
+                # 4. 优化并行处理路径
+                parallel_groups = await self._identify_parallel_processing_groups(dependency_graph, optimal_order)
+
+                # 5. 优化缓存策略
+                cache_optimization = await self._optimize_cache_placement(dependency_graph)
+
+                # 6. 更新数据流配置
+                await self._update_flow_configuration(optimal_order, parallel_groups, cache_optimization)
+
+                # 7. 记录优化结果
+                optimization_result = {
+                    'execution_order': optimal_order,
+                    'parallel_groups': parallel_groups,
+                    'cache_strategy': cache_optimization,
+                    'circular_dependencies_resolved': len(circular_deps),
+                    'optimization_timestamp': datetime.now().isoformat()
+                }
+
+                self._flow_statistics['last_optimization'] = optimization_result
+                logger.info(f"Data flow path optimization completed: {len(optimal_order)} nodes optimized")
+
+        except Exception as e:
+            logger.error(f"Data flow path optimization failed: {e}")
+            raise DataFlowException(f"Path optimization failed: {e}")
     
     async def _detect_circular_dependencies(self) -> List[List[str]]:
         """检测循环依赖"""
-        # 实现循环依赖检测算法
-        # 这里返回空列表表示没有循环依赖
-        return []
-    
+        try:
+            circular_deps = []
+            visited = set()
+            rec_stack = set()
+
+            def dfs(node: str, path: List[str]) -> bool:
+                """深度优先搜索检测循环"""
+                if node in rec_stack:
+                    # 找到循环，提取循环路径
+                    cycle_start = path.index(node)
+                    cycle = path[cycle_start:] + [node]
+                    circular_deps.append(cycle)
+                    return True
+
+                if node in visited:
+                    return False
+
+                visited.add(node)
+                rec_stack.add(node)
+
+                # 检查所有依赖
+                dependencies = self._data_dependencies.get(node, set())
+                for dep in dependencies:
+                    if dfs(dep, path + [node]):
+                        return True
+
+                rec_stack.remove(node)
+                return False
+
+            # 对所有节点执行DFS
+            for node in self._data_dependencies.keys():
+                if node not in visited:
+                    dfs(node, [])
+
+            return circular_deps
+
+        except Exception as e:
+            logger.error(f"Circular dependency detection failed: {e}")
+            return []
+
+    async def _build_dependency_graph(self) -> Dict[str, Set[str]]:
+        """构建依赖图"""
+        # 返回当前的依赖关系图
+        return dict(self._data_dependencies)
+
+    async def _calculate_optimal_execution_order(self, dependency_graph: Dict[str, Set[str]]) -> List[str]:
+        """计算最优执行顺序（拓扑排序）"""
+        try:
+            # 计算入度
+            in_degree = defaultdict(int)
+            all_nodes = set(dependency_graph.keys())
+
+            # 添加所有被依赖的节点
+            for deps in dependency_graph.values():
+                all_nodes.update(deps)
+
+            # 初始化入度
+            for node in all_nodes:
+                in_degree[node] = 0
+
+            # 计算入度
+            for node, deps in dependency_graph.items():
+                for dep in deps:
+                    in_degree[node] += 1
+
+            # 拓扑排序
+            queue = deque([node for node in all_nodes if in_degree[node] == 0])
+            result = []
+
+            while queue:
+                node = queue.popleft()
+                result.append(node)
+
+                # 更新依赖此节点的其他节点的入度
+                for dependent, deps in dependency_graph.items():
+                    if node in deps:
+                        in_degree[dependent] -= 1
+                        if in_degree[dependent] == 0:
+                            queue.append(dependent)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to calculate optimal execution order: {e}")
+            return list(dependency_graph.keys())
+
+    async def _identify_parallel_processing_groups(self, dependency_graph: Dict[str, Set[str]], execution_order: List[str]) -> List[List[str]]:
+        """识别可并行处理的组"""
+        try:
+            parallel_groups = []
+            processed = set()
+
+            for node in execution_order:
+                if node in processed:
+                    continue
+
+                # 找到所有可以与当前节点并行处理的节点
+                parallel_group = [node]
+                node_deps = dependency_graph.get(node, set())
+
+                for other_node in execution_order:
+                    if other_node in processed or other_node == node:
+                        continue
+
+                    other_deps = dependency_graph.get(other_node, set())
+
+                    # 检查是否可以并行：没有相互依赖关系
+                    if (node not in other_deps and other_node not in node_deps and
+                        not node_deps.intersection(other_deps)):
+                        parallel_group.append(other_node)
+
+                parallel_groups.append(parallel_group)
+                processed.update(parallel_group)
+
+            return parallel_groups
+
+        except Exception as e:
+            logger.error(f"Failed to identify parallel processing groups: {e}")
+            return [[node] for node in execution_order]
+
+    async def _optimize_cache_placement(self, dependency_graph: Dict[str, Set[str]]) -> Dict[str, Any]:
+        """优化缓存放置策略"""
+        try:
+            cache_strategy = {}
+
+            # 计算节点的访问频率（基于依赖关系）
+            access_frequency = defaultdict(int)
+            for node, deps in dependency_graph.items():
+                for dep in deps:
+                    access_frequency[dep] += 1
+
+            # 根据访问频率确定缓存策略
+            for node, frequency in access_frequency.items():
+                if frequency >= 3:
+                    cache_strategy[node] = {
+                        'cache_enabled': True,
+                        'cache_ttl': 300,  # 5分钟
+                        'cache_size': 'large',
+                        'priority': 'high'
+                    }
+                elif frequency >= 2:
+                    cache_strategy[node] = {
+                        'cache_enabled': True,
+                        'cache_ttl': 180,  # 3分钟
+                        'cache_size': 'medium',
+                        'priority': 'medium'
+                    }
+                else:
+                    cache_strategy[node] = {
+                        'cache_enabled': True,
+                        'cache_ttl': 60,   # 1分钟
+                        'cache_size': 'small',
+                        'priority': 'low'
+                    }
+
+            return cache_strategy
+
+        except Exception as e:
+            logger.error(f"Failed to optimize cache placement: {e}")
+            return {}
+
+    async def _resolve_circular_dependencies(self, circular_deps: List[List[str]]) -> None:
+        """解决循环依赖"""
+        try:
+            for cycle in circular_deps:
+                logger.warning(f"Resolving circular dependency: {' -> '.join(cycle)}")
+
+                # 简单策略：移除循环中最后一个依赖关系
+                if len(cycle) >= 2:
+                    source = cycle[-2]
+                    target = cycle[-1]
+
+                    if source in self._data_dependencies and target in self._data_dependencies[source]:
+                        self._data_dependencies[source].remove(target)
+                        logger.info(f"Removed dependency: {source} -> {target}")
+
+        except Exception as e:
+            logger.error(f"Failed to resolve circular dependencies: {e}")
+
+    async def _update_flow_configuration(self, execution_order: List[str], parallel_groups: List[List[str]], cache_strategy: Dict[str, Any]) -> None:
+        """更新数据流配置"""
+        try:
+            # 更新执行顺序配置
+            self._flow_statistics['execution_order'] = execution_order
+            self._flow_statistics['parallel_groups'] = parallel_groups
+            self._flow_statistics['cache_strategy'] = cache_strategy
+
+            # 应用缓存策略
+            for node, strategy in cache_strategy.items():
+                await self._cache_manager.update_cache_policy(node, strategy)
+
+            logger.info("Data flow configuration updated successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to update flow configuration: {e}")
+
     async def _optimize_cache_strategy(self) -> Dict[str, Any]:
         """优化缓存策略"""
         return await self._cache_manager.optimize_cache_strategy()

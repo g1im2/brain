@@ -2,11 +2,11 @@
 三层金融交易系统集成层模块
 
 提供系统协调、信号路由、数据流管理等核心集成功能，
-实现顶层宏观战略、中间层组合管理、底层个股战术系统的统一协调。
+实现顶层宏观战略、中间层组合管理、底层策略分析系统的统一协调。
 
 主要组件：
 - SystemCoordinator: 系统协调器
-- SignalRouter: 信号路由器  
+- SignalRouter: 信号路由器
 - DataFlowManager: 数据流管理器
 - TemporalValidationCoordinator: 时间维度验证协调器
 - 各层适配器组件
@@ -56,7 +56,8 @@ from .validators import (
 from .adapters import (
     MacroAdapter,
     PortfolioAdapter,
-    TacticalAdapter
+    StrategyAdapter,
+    FlowhubAdapter
 )
 
 from .monitors import (
@@ -94,8 +95,9 @@ __all__ = [
     
     # 适配器
     'MacroAdapter',
-    'PortfolioAdapter', 
-    'TacticalAdapter',
+    'PortfolioAdapter',
+    'StrategyAdapter',
+    'FlowhubAdapter',
     
     # 监控组件
     'SystemMonitor',

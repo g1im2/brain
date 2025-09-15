@@ -55,11 +55,11 @@ class HttpClient:
         """获取API前缀"""
         api_prefixes = {
             'macro': '/api/v1/macro',
-            'portfolio': '/api/v1/portfolio',
+            'portfolio': '/api/v1',  # 修正：portfolio服务使用/api/v1作为基础路径
             'execution': '/api/v1/execution',
             'flowhub': '/api/v1/jobs'
         }
-        
+
         return api_prefixes.get(self.service_name, '/api/v1')
     
     async def start(self):
@@ -229,7 +229,7 @@ class HttpClient:
                     continue
                 else:
                     self._error_count += 1
-                    raise ConnectionException(f"Connection failed to {self.service_name}: {e}")
+                    raise ConnectionException("HttpClient", self.service_name, f"Connection failed: {e}")
             
             except Exception as e:
                 self._error_count += 1
@@ -241,7 +241,7 @@ class HttpClient:
     
     def get_statistics(self) -> Dict[str, Any]:
         """获取统计信息
-        
+
         Returns:
             Dict[str, Any]: 统计信息
         """
@@ -252,3 +252,10 @@ class HttpClient:
             'error_count': self._error_count,
             'success_rate': self._success_count / max(self._request_count, 1)
         }
+
+    async def close(self) -> None:
+        """关闭HTTP客户端会话"""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+            logger.info(f"HTTP client for {self.service_name} closed")

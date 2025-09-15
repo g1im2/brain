@@ -12,6 +12,8 @@ from typing import Dict, List, Any, Optional
 from ..interfaces import ISystemAdapter
 from ..config import IntegrationConfig
 from ..exceptions import AdapterException, ConnectionException, HealthCheckException
+from .http_client import HttpClient
+from .portfolio_request_mapper import PortfolioRequestMapper
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,12 @@ class PortfolioAdapter(ISystemAdapter):
         self._connection_pool = None
         self._last_health_check = None
         
+        # HTTP客户端和请求映射器
+        self._http_client: Optional[HttpClient] = None
+        self._request_mapper = PortfolioRequestMapper(
+            default_portfolio_id=getattr(config.adapter, 'default_portfolio_id', 'default_portfolio')
+        )
+
         # 组合系统配置
         self._portfolio_system_config = {
             'endpoint': 'portfolio_management',
@@ -41,7 +49,7 @@ class PortfolioAdapter(ISystemAdapter):
             'max_retries': self.config.adapter.max_retries,
             'retry_delay': self.config.adapter.retry_delay
         }
-        
+
         # 请求统计
         self._request_statistics = {
             'total_requests': 0,
@@ -49,8 +57,8 @@ class PortfolioAdapter(ISystemAdapter):
             'failed_requests': 0,
             'average_response_time': 0.0
         }
-        
-        logger.info("PortfolioAdapter initialized")
+
+        logger.info("PortfolioAdapter initialized with HTTP client integration")
     
     async def connect_to_system(self) -> bool:
         """连接到组合系统
@@ -61,8 +69,11 @@ class PortfolioAdapter(ISystemAdapter):
         try:
             logger.info("Connecting to portfolio management system...")
             
-            # 模拟连接过程
-            await asyncio.sleep(0.1)
+            # 初始化HTTP客户端
+            if self._http_client is None:
+                self._http_client = HttpClient('portfolio', self.config)
+                await self._http_client.start()
+                logger.info("HTTP client for portfolio service initialized")
             
             # 初始化连接池
             if self.config.adapter.enable_connection_pooling:
@@ -89,10 +100,16 @@ class PortfolioAdapter(ISystemAdapter):
             bool: 断开是否成功
         """
         try:
+            # 关闭HTTP客户端
+            if self._http_client:
+                await self._http_client.stop()
+                self._http_client = None
+                logger.info("HTTP client for portfolio service stopped")
+
             if self._connection_pool:
                 await self._close_connection_pool()
                 self._connection_pool = None
-            
+
             self._is_connected = False
             logger.info("Disconnected from portfolio management system")
             return True
@@ -110,15 +127,21 @@ class PortfolioAdapter(ISystemAdapter):
         try:
             start_time = datetime.now()
             
-            # 模拟健康检查请求
+            # 构造健康检查请求
             health_request = {
                 'type': 'health_check',
                 'timestamp': start_time.isoformat(),
                 'adapter': 'portfolio_adapter'
             }
-            
-            # 发送健康检查请求
-            response = await self._send_health_check_request(health_request)
+
+            # 使用HTTP客户端发送健康检查请求
+            if self._http_client is None:
+                logger.warning("HTTP client not initialized, cannot perform health check")
+                return False
+
+            # 映射健康检查请求
+            method, api_path, request_body = self._request_mapper.map_request(health_request)
+            response = await self._http_client.request(method, api_path, request_body)
             
             # 验证响应
             is_healthy = self._validate_health_response(response)
@@ -308,25 +331,27 @@ class PortfolioAdapter(ISystemAdapter):
     # 私有方法实现
     async def _create_connection_pool(self):
         """创建连接池"""
-        # 模拟连接池创建
-        logger.debug("Created connection pool for portfolio system")
+        # HTTP客户端内部管理连接池，这里只记录日志
+        logger.debug("Connection pool managed by HTTP client for portfolio system")
         return {"pool_size": self.config.adapter.pool_size, "active_connections": 0}
-    
+
     async def _close_connection_pool(self):
         """关闭连接池"""
-        # 模拟连接池关闭
-        logger.debug("Closed connection pool for portfolio system")
+        # HTTP客户端内部管理连接池，这里只记录日志
+        logger.debug("Connection pool closed by HTTP client for portfolio system")
     
     async def _send_health_check_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """发送健康检查请求"""
-        # 模拟健康检查请求
-        await asyncio.sleep(0.01)
-        return {
-            'status': 'healthy',
-            'timestamp': datetime.now().isoformat(),
-            'system': 'portfolio_management',
-            'version': '1.0.0'
-        }
+        if not self._http_client:
+            raise AdapterException("PortfolioAdapter", "HTTP client not initialized")
+
+        try:
+            # 直接调用健康检查端点
+            response = await self._http_client.get('health')
+            return response
+        except Exception as e:
+            logger.error(f"Health check request failed: {e}")
+            raise AdapterException("PortfolioAdapter", f"Health check failed: {e}")
     
     def _validate_health_response(self, response: Dict[str, Any]) -> bool:
         """验证健康检查响应"""
@@ -336,61 +361,30 @@ class PortfolioAdapter(ISystemAdapter):
     
     async def _send_portfolio_request(self, request: Any) -> Any:
         """发送组合系统请求"""
-        # 模拟向组合系统发送请求
-        await asyncio.sleep(0.1)  # 模拟网络延迟
-        
-        # 根据请求类型返回模拟响应
-        if isinstance(request, dict):
-            request_type = request.get('type', 'unknown')
-            
-            if request_type == 'portfolio_optimization':
-                macro_state = request.get('macro_state', {})
-                return {
-                    'status': 'success',
-                    'data': {
-                        'target_position': 0.8,
-                        'sector_weights': {
-                            'technology': 0.3,
-                            'finance': 0.25,
-                            'healthcare': 0.2,
-                            'consumer': 0.15,
-                            'energy': 0.1
-                        },
-                        'risk_constraints': {
-                            'max_sector_weight': 0.35,
-                            'max_single_stock': 0.05,
-                            'var_limit': 0.02
-                        },
-                        'rebalance_threshold': 0.05,
-                        'expected_return': 0.12,
-                        'expected_volatility': 0.15,
-                        'sharpe_ratio': 0.8
-                    },
-                    'timestamp': datetime.now().isoformat()
-                }
-            elif request_type == 'risk_assessment':
-                return {
-                    'status': 'success',
-                    'data': {
-                        'var_1d': 0.015,
-                        'var_5d': 0.035,
-                        'expected_shortfall': 0.025,
-                        'beta': 1.1,
-                        'tracking_error': 0.03,
-                        'information_ratio': 0.5,
-                        'risk_score': 0.6
-                    },
-                    'timestamp': datetime.now().isoformat()
-                }
-            elif request_type == 'status_request':
-                return {
-                    'status': 'running',
-                    'last_optimization': datetime.now().isoformat(),
-                    'active_portfolios': 5,
-                    'total_aum': 1000000000
-                }
-        
-        return {'status': 'success', 'data': {}}
+        if not self._http_client:
+            raise AdapterException("PortfolioAdapter", "HTTP client not initialized")
+
+        if not isinstance(request, dict):
+            raise AdapterException("PortfolioAdapter", "Invalid request format")
+
+        try:
+            # 使用请求映射器将通用请求转换为具体的API调用
+            method, api_path, request_body = self._request_mapper.map_request(request)
+
+            logger.debug(f"Sending portfolio request: {method} {api_path}")
+
+            # 发送HTTP请求
+            response = await self._http_client.request(method, api_path, request_body)
+
+            # 映射响应格式
+            mapped_response = self._request_mapper.map_response(response, request.get('type', 'unknown'))
+
+            logger.debug(f"Portfolio request completed successfully")
+            return mapped_response
+
+        except Exception as e:
+            logger.error(f"Portfolio request failed: {e}")
+            raise AdapterException("PortfolioAdapter", f"Request failed: {e}")
     
     def _validate_response_format(self, response: Any) -> bool:
         """验证响应格式"""

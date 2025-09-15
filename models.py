@@ -65,7 +65,7 @@ class SystemStatus:
     overall_health: SystemHealthStatus
     macro_system_status: SystemHealthStatus
     portfolio_system_status: SystemHealthStatus
-    tactical_system_status: SystemHealthStatus
+    strategy_system_status: SystemHealthStatus
     data_pipeline_status: SystemHealthStatus
     last_update_time: datetime
     active_sessions: int = 0
@@ -83,8 +83,8 @@ class AnalysisCycleResult:
     end_time: Optional[datetime] = None
     macro_state: Optional[Any] = None
     portfolio_instruction: Optional[Any] = None
-    trading_signals: List[Any] = field(default_factory=list)
-    execution_result: Optional[Any] = None
+    analysis_results: List[Any] = field(default_factory=list)
+    validation_result: Optional[Any] = None
     validation_results: List[Any] = field(default_factory=list)
     performance_metrics: Dict[str, float] = field(default_factory=dict)
     status: str = "pending"
@@ -131,7 +131,7 @@ class ValidationResult:
 class SignalRoutingResult:
     """信号路由结果数据模型"""
     routing_id: str
-    source_layer: str  # macro, portfolio, tactical
+    source_layer: str  # macro, portfolio, strategy
     target_layer: str
     original_signals: List[Any]
     routed_signals: List[Any]

@@ -15,8 +15,8 @@ from typing import Dict, List, Any, Optional, Callable, Set
 from collections import defaultdict, deque
 from enum import Enum
 from dataclasses import dataclass, field
-from email.mime.text import MimeText
-from email.mime.multipart import MimeMultipart
+from email.mime.text import MIMEText as MimeText
+from email.mime.multipart import MIMEMultipart as MimeMultipart
 import threading
 
 from ..models import AlertInfo, PerformanceMetrics, SystemStatus
@@ -105,8 +105,9 @@ class NotificationChannel:
         self.is_enabled = config.get('enabled', True)
     
     async def send_notification(self, notification: AlertNotification) -> bool:
-        """发送通知"""
-        raise NotImplementedError
+        """发送通知 - 基类方法，由子类实现"""
+        logger.warning(f"NotificationChannel.send_notification called - should be implemented by subclass")
+        return False
 
 
 class EmailChannel(NotificationChannel):

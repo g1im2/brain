@@ -6,10 +6,12 @@
 
 from .macro_adapter import MacroAdapter
 from .portfolio_adapter import PortfolioAdapter
-from .tactical_adapter import TacticalAdapter
+from .strategy_adapter import StrategyAdapter
+from .flowhub_adapter import FlowhubAdapter
 
 __all__ = [
     'MacroAdapter',
     'PortfolioAdapter',
-    'TacticalAdapter'
+    'StrategyAdapter',
+    'FlowhubAdapter'
 ]

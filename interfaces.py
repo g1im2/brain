@@ -117,14 +117,14 @@ class ISignalRouter(ABC):
         pass
     
     @abstractmethod
-    async def route_trading_signals(self, signals: List[Any]) -> List[Any]:
-        """路由交易信号
-        
+    async def route_analysis_results(self, results: List[Any]) -> List[Any]:
+        """路由分析结果
+
         Args:
-            signals: 交易信号列表
-            
+            results: 分析结果列表
+
         Returns:
-            List[Any]: 路由后的信号列表
+            List[Any]: 路由后的结果列表
         """
         pass
     
