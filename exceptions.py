@@ -319,34 +319,77 @@ class ConfigurationException(IntegrationException):
 
 
 # 异常处理工具函数
-def handle_exception(exception: Exception, component: str = "unknown", 
-                    context: Optional[Dict[str, Any]] = None) -> IntegrationException:
+def handle_exception(exception: Exception, component: str = "unknown",
+                    context: Optional[Dict[str, Any]] = None,
+                    mask_sensitive: bool = True) -> IntegrationException:
     """统一异常处理函数
-    
+
     Args:
         exception: 原始异常
         component: 出错组件
         context: 上下文信息
-        
+        mask_sensitive: 是否屏蔽敏感信息
+
     Returns:
         IntegrationException: 标准化异常
     """
     if isinstance(exception, IntegrationException):
         return exception
-    
+
     # 将标准异常转换为集成层异常
     details = context or {}
+
+    # 屏蔽敏感信息
+    if mask_sensitive:
+        message = _mask_sensitive_info(str(exception))
+        details = _mask_sensitive_details(details)
+    else:
+        message = str(exception)
+
     details.update({
         'original_exception_type': type(exception).__name__,
-        'original_exception_message': str(exception)
+        'original_exception_message': message
     })
-    
+
     return IntegrationException(
-        message=str(exception),
+        message=message,
         error_code="WRAPPED_EXCEPTION",
         component=component,
         details=details
     )
+
+
+def _mask_sensitive_info(message: str) -> str:
+    """屏蔽敏感信息"""
+    import re
+
+    # 屏蔽密码、token等敏感信息
+    patterns = [
+        (r'password["\s]*[:=]["\s]*[^"\s]+', 'password=***'),
+        (r'token["\s]*[:=]["\s]*[^"\s]+', 'token=***'),
+        (r'key["\s]*[:=]["\s]*[^"\s]+', 'key=***'),
+        (r'secret["\s]*[:=]["\s]*[^"\s]+', 'secret=***'),
+    ]
+
+    masked_message = message
+    for pattern, replacement in patterns:
+        masked_message = re.sub(pattern, replacement, masked_message, flags=re.IGNORECASE)
+
+    return masked_message
+
+
+def _mask_sensitive_details(details: Dict[str, Any]) -> Dict[str, Any]:
+    """屏蔽详情中的敏感信息"""
+    sensitive_keys = {'password', 'token', 'key', 'secret', 'auth', 'credential'}
+
+    masked_details = {}
+    for key, value in details.items():
+        if any(sensitive_key in key.lower() for sensitive_key in sensitive_keys):
+            masked_details[key] = '***'
+        else:
+            masked_details[key] = value
+
+    return masked_details
 
 
 def create_error_response(exception: IntegrationException) -> Dict[str, Any]:

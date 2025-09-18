@@ -414,3 +414,97 @@ class FlowhubAdapter(ISystemAdapter):
                 'message': str(e),
                 'adapter_statistics': self._request_statistics
             }
+
+    # ==================== 宏观数据任务创建方法 ====================
+
+    async def create_macro_data_job(self, data_type: str, incremental: bool = True, max_history: bool = False, **kwargs) -> Dict[str, Any]:
+        """创建宏观数据抓取任务
+
+        Args:
+            data_type: 数据类型 (e.g. 'gdp-data', 'price-index-data')
+            incremental: 是否增量更新
+            max_history: 是否使用最大历史数据范围（首次抓取时使用）
+            **kwargs: 其他参数
+
+        Returns:
+            Dict[str, Any]: 任务创建结果
+        """
+        try:
+            # 导入配置管理器
+            from ..scheduler.macro_data_config import MacroDataConfig
+
+            # 构建请求参数
+            params = {
+                'incremental': incremental
+            }
+
+            # 如果使用最大历史范围，添加历史范围参数
+            if max_history:
+                history_range = MacroDataConfig.get_max_history_range(data_type)
+                if history_range:
+                    params.update({
+                        'start_date': history_range.get('start'),
+                        'end_date': history_range.get('end'),
+                        'max_history': True
+                    })
+                    logger.info(f"Using max history range for {data_type}: {history_range['start']} to {history_range['end']}")
+                else:
+                    logger.warning(f"No history range configured for {data_type}, using default range")
+
+            # 根据数据类型添加特定参数
+            if data_type == 'gdp-data':
+                # GDP数据使用默认季度范围
+                params.update({
+                    'start_quarter': kwargs.get('start_quarter', '2020Q1'),
+                    'end_quarter': kwargs.get('end_quarter', '2024Q4')
+                })
+            elif data_type in ['price-index-data', 'money-supply-data', 'social-financing-data',
+                             'investment-data', 'industrial-data', 'sentiment-index-data', 'inventory-cycle-data']:
+                # 月度数据使用默认月份范围
+                params.update({
+                    'start_month': kwargs.get('start_month', '202001'),
+                    'end_month': kwargs.get('end_month', '202412')
+                })
+            elif data_type in ['interest-rate-data', 'stock-index-data', 'market-flow-data', 'commodity-price-data']:
+                # 日度数据使用默认日期范围
+                params.update({
+                    'start_date': kwargs.get('start_date', '2024-01-01'),
+                    'end_date': kwargs.get('end_date', '2024-12-31')
+                })
+            elif data_type in ['innovation-data', 'demographic-data']:
+                # 年度数据使用默认年份范围
+                params.update({
+                    'start_year': kwargs.get('start_year', '2020'),
+                    'end_year': kwargs.get('end_year', '2024')
+                })
+
+            # 添加特定类型参数
+            if 'index_types' in kwargs:
+                params['index_types'] = kwargs['index_types']
+            if 'rate_types' in kwargs:
+                params['rate_types'] = kwargs['rate_types']
+            if 'index_codes' in kwargs:
+                params['index_codes'] = kwargs['index_codes']
+            if 'flow_types' in kwargs:
+                params['flow_types'] = kwargs['flow_types']
+            if 'commodity_types' in kwargs:
+                params['commodity_types'] = kwargs['commodity_types']
+            if 'indicators' in kwargs:
+                params['indicators'] = kwargs['indicators']
+
+            # 发送请求
+            endpoint = f'/api/v1/jobs/{data_type}'
+            response = await self._make_request('POST', endpoint, params)
+
+            # 更新统计信息
+            self._request_statistics['total_requests'] += 1
+            self._request_statistics['successful_requests'] += 1
+
+            logger.info(f"Macro data job created for {data_type}: {response.get('job_id')}")
+            return response
+
+        except Exception as e:
+            self._request_statistics['total_requests'] += 1
+            self._request_statistics['failed_requests'] += 1
+            logger.error(f"Failed to create macro data job for {data_type}: {e}")
+            raise AdapterException("FlowhubAdapter", f"Macro data job creation failed for {data_type}: {e}")
