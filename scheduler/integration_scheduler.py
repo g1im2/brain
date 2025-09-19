@@ -55,6 +55,10 @@ class IntegrationScheduler:
         from .macro_data_tasks import MacroDataTaskScheduler
         self._macro_scheduler = MacroDataTaskScheduler(config, coordinator)
 
+        # 创建Portfolio数据任务调度器
+        from .portfolio_data_tasks import PortfolioDataTaskScheduler
+        self._portfolio_scheduler = PortfolioDataTaskScheduler(config, coordinator)
+
         self._setup_default_tasks()
 
         logger.info("IntegrationScheduler initialized")
@@ -76,6 +80,7 @@ class IntegrationScheduler:
                 # 只添加planer，不重新启动
                 add_planer(self._planer)
                 add_planer(self._macro_scheduler.get_planer())
+                add_planer(self._portfolio_scheduler.get_planer())
                 self._is_running = True
                 logger.info("IntegrationScheduler started (asyncron already running)")
                 return
@@ -86,11 +91,14 @@ class IntegrationScheduler:
             # 添加宏观数据任务planer到asyncron
             add_planer(self._macro_scheduler.get_planer())
 
+            # 添加Portfolio数据任务planer到asyncron
+            add_planer(self._portfolio_scheduler.get_planer())
+
             # 启动asyncron调度器
             start_scheduler()
 
             self._is_running = True
-            logger.info("IntegrationScheduler started with macro data tasks")
+            logger.info("IntegrationScheduler started with macro and portfolio data tasks")
 
         except Exception as e:
             logger.error(f"Failed to start scheduler: {e}")
@@ -259,6 +267,14 @@ class IntegrationScheduler:
             task['status'] = 'active' if self._is_running else 'stopped'
 
         tasks.extend(macro_tasks)
+
+        # 添加Portfolio数据任务
+        portfolio_tasks = self._portfolio_scheduler.get_portfolio_tasks_info()
+        for task in portfolio_tasks:
+            task['status'] = 'active' if self._is_running else 'stopped'
+            task['category'] = 'portfolio'
+
+        tasks.extend(portfolio_tasks)
         return tasks
 
     async def get_task(self, task_id: str) -> Dict[str, Any]:
@@ -286,6 +302,16 @@ class IntegrationScheduler:
             'system_health_check': self._system_health_check,
         }
 
+        # 检查是否为Portfolio任务
+        portfolio_tasks = [
+            'adj_factors_fetch',
+            'stock_basic_fetch',
+            'industry_classification_fetch',
+            'index_components_fetch',
+            'data_quality_check',
+            'full_data_rebuild'
+        ]
+
         if task_id in task_methods:
             try:
                 await task_methods[task_id]()
@@ -297,6 +323,13 @@ class IntegrationScheduler:
             except Exception as e:
                 logger.error(f"Failed to trigger task {task_id}: {e}")
                 raise AdapterException(f"Task trigger failed: {e}")
+        elif task_id in portfolio_tasks:
+            try:
+                result = await self._portfolio_scheduler.trigger_task_manually(task_id)
+                return result
+            except Exception as e:
+                logger.error(f"Failed to trigger portfolio task {task_id}: {e}")
+                raise AdapterException(f"Portfolio task trigger failed: {e}")
         else:
             raise AdapterException(f"Task not found: {task_id}")
     
