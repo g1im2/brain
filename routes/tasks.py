@@ -5,7 +5,7 @@
 from aiohttp import web
 from aiohttp_cors import CorsConfig
 
-from ..handlers.tasks import TaskHandler
+from handlers.tasks import TaskHandler
 
 
 def setup_task_routes(app: web.Application, cors: CorsConfig = None):

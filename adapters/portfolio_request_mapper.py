@@ -235,10 +235,11 @@ class PortfolioRequestMapper:
         return response
     
     def _map_health_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
-        """映射健康检查响应"""
+        """映射健康检查响应（兼容portfolio-service返回结构）"""
+        data = response.get('data', {}) if isinstance(response, dict) else {}
         return {
-            'status': response.get('status', 'unknown'),
-            'timestamp': response.get('timestamp', datetime.now().isoformat()),
-            'system': 'portfolio_management',
-            'version': response.get('version', '1.0.0')
+            'status': data.get('status', response.get('status', 'unknown')),
+            'timestamp': data.get('timestamp', response.get('timestamp', datetime.now().isoformat())),
+            'system': data.get('service', 'portfolio_management'),
+            'version': data.get('version', response.get('version', '1.0.0'))
         }

@@ -19,9 +19,9 @@ from email.mime.text import MIMEText as MimeText
 from email.mime.multipart import MIMEMultipart as MimeMultipart
 import threading
 
-from ..models import AlertInfo, PerformanceMetrics, SystemStatus
-from ..config import IntegrationConfig
-from ..exceptions import MonitoringException, AlertException
+from models import AlertInfo, PerformanceMetrics, SystemStatus
+from config import IntegrationConfig
+from exceptions import MonitoringException, AlertException
 
 logger = logging.getLogger(__name__)
 

@@ -59,28 +59,31 @@ class BaseHandler:
     
     async def get_request_json(self, request: web.Request) -> Dict[str, Any]:
         """获取请求JSON数据
-        
+
         Args:
             request: HTTP请求对象
-            
+
         Returns:
             Dict[str, Any]: JSON数据
-            
+
         Raises:
             web.HTTPBadRequest: JSON解析失败
         """
         try:
-            if request.content_type == 'application/json':
-                return await request.json()
+            ct = request.headers.get('Content-Type', '')
+            if 'application/json' in ct:
+                raw = await request.text()
+                try:
+                    return json.loads(raw) if raw else {}
+                except json.JSONDecodeError as e:
+                    self.logger.error(f"JSON decode error: {e}; raw body: {raw[:200]}")
+                    raise web.HTTPBadRequest(text="Invalid JSON format")
             else:
                 return {}
-        except json.JSONDecodeError as e:
-            self.logger.error(f"JSON decode error: {e}")
-            raise web.HTTPBadRequest(text="Invalid JSON format")
         except Exception as e:
             self.logger.error(f"Error reading request data: {e}")
             raise web.HTTPBadRequest(text="Error reading request data")
-    
+
     def get_query_params(self, request: web.Request) -> Dict[str, str]:
         """获取查询参数
         

@@ -5,7 +5,7 @@
 from aiohttp import web
 from aiohttp_cors import CorsConfig
 
-from ..handlers.signals import SignalHandler
+from handlers.signals import SignalHandler
 
 
 def setup_signal_routes(app: web.Application, cors: CorsConfig = None):

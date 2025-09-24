@@ -10,11 +10,11 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
-from ..interfaces import ISystemAdapter
-from ..config import IntegrationConfig
-from ..exceptions import AdapterException, ConnectionException, HealthCheckException
-from .http_client import HttpClient
-from .flowhub_request_mapper import FlowhubRequestMapper
+from interfaces import ISystemAdapter
+from config import IntegrationConfig
+from exceptions import AdapterException, ConnectionException, HealthCheckException
+from adapters.http_client import HttpClient
+from adapters.flowhub_request_mapper import FlowhubRequestMapper
 
 logger = logging.getLogger(__name__)
 

@@ -11,9 +11,9 @@ from typing import Dict, List, Any, Optional
 import json
 import hashlib
 
-from ..models import StandardSignal
-from ..config import IntegrationConfig
-from ..exceptions import SignalValidationException
+from models import StandardSignal
+from config import IntegrationConfig
+from exceptions import SignalValidationException
 
 logger = logging.getLogger(__name__)
 

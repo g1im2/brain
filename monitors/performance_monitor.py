@@ -15,14 +15,12 @@ from collections import deque, defaultdict
 from enum import Enum
 from dataclasses import dataclass, field
 import threading
-from scipy import stats
-from sklearn.linear_model import LinearRegression
 import warnings
 warnings.filterwarnings('ignore')
 
-from ..models import PerformanceMetrics
-from ..config import IntegrationConfig
-from ..exceptions import MonitoringException
+from models import PerformanceMetrics
+from config import IntegrationConfig
+from exceptions import MonitoringException
 
 logger = logging.getLogger(__name__)
 
@@ -602,11 +600,23 @@ class PerformanceMonitor:
             X = np.array(timestamps).reshape(-1, 1)
             y = np.array(values)
 
-            model = LinearRegression()
-            model.fit(X, y)
+            # 简单线性回归计算斜率和截距
+            n = len(timestamps)
+            if n < 2:
+                slope = 0
+                intercept = np.mean(values) if len(values) > 0 else 0
+                r_squared = 0
+            else:
+                x_mean = np.mean(timestamps)
+                y_mean = np.mean(values)
+                slope = np.sum((timestamps - x_mean) * (values - y_mean)) / np.sum((timestamps - x_mean) ** 2)
+                intercept = y_mean - slope * x_mean
 
-            slope = model.coef_[0]
-            r_squared = model.score(X, y)
+                # 计算R²
+                y_pred = slope * timestamps + intercept
+                ss_res = np.sum((values - y_pred) ** 2)
+                ss_tot = np.sum((values - y_mean) ** 2)
+                r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
 
             # 确定趋势方向
             if abs(slope) < 1e-6:
@@ -627,7 +637,8 @@ class PerformanceMonitor:
                 3600  # 每小时一个点
             ).reshape(-1, 1)
 
-            predicted_values = model.predict(future_timestamps).tolist()
+            # 使用线性方程预测: y = slope * x + intercept
+            predicted_values = [slope * t + intercept for t in future_timestamps.flatten()]
 
             return PerformanceTrend(
                 metric_name=f"{component}_{metric_name}",
@@ -652,8 +663,15 @@ class PerformanceMonitor:
             y = np.array(values)
 
             # 简单线性回归预测
-            model = LinearRegression()
-            model.fit(X, y)
+            n = len(timestamps)
+            if n < 2:
+                slope = 0
+                intercept = np.mean(values) if len(values) > 0 else 0
+            else:
+                x_mean = np.mean(timestamps)
+                y_mean = np.mean(values)
+                slope = np.sum((timestamps - x_mean) * (values - y_mean)) / np.sum((timestamps - x_mean) ** 2)
+                intercept = y_mean - slope * x_mean
 
             # 生成未来时间点
             last_timestamp = timestamps[-1]
@@ -664,7 +682,7 @@ class PerformanceMonitor:
             ).reshape(-1, 1)
 
             # 预测
-            predictions = model.predict(future_timestamps)
+            predictions = np.array([slope * t + intercept for t in future_timestamps.flatten()])
 
             # 确保预测值在合理范围内
             predictions = np.clip(predictions, 0, None)

@@ -10,11 +10,11 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
-from ..interfaces import ISystemAdapter
-from ..config import IntegrationConfig
-from ..exceptions import AdapterException, ConnectionException, HealthCheckException
-from .http_client import HttpClient
-from .execution_request_mapper import ExecutionRequestMapper
+from interfaces import ISystemAdapter
+from config import IntegrationConfig
+from exceptions import AdapterException, ConnectionException, HealthCheckException
+from adapters.http_client import HttpClient
+from adapters.execution_request_mapper import ExecutionRequestMapper
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +210,7 @@ class StrategyAdapter(ISystemAdapter):
                 mapped_request = self._request_mapper.map_strategy_analysis_request(request)
                 
                 # 发送请求到execution服务
-                response = await self._http_client.post('/analyze/batch', mapped_request)
+                response = await self._http_client.post('analyze/batch', mapped_request)
                 
                 # 处理响应
                 processed_response = await self.handle_response(response)
@@ -445,7 +445,7 @@ class StrategyAdapter(ISystemAdapter):
         try:
             if self._http_client:
                 # 获取execution服务的分析能力
-                response = await self._http_client.get('/analyze/capabilities')
+                response = await self._http_client.get('analyze/capabilities')
                 if response.get('success'):
                     capabilities = response.get('data', {})
                     available_analyzers = capabilities.get('available_analyzers', [])

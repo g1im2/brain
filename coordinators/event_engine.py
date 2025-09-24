@@ -18,9 +18,9 @@ from dataclasses import dataclass, field
 import threading
 import weakref
 
-from ..models import MarketEvent, EventType
-from ..config import IntegrationConfig
-from ..exceptions import IntegrationException
+from models import MarketEvent, EventType
+from config import IntegrationConfig
+from exceptions import IntegrationException
 
 logger = logging.getLogger(__name__)
 

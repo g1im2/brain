@@ -5,7 +5,7 @@
 from aiohttp import web
 from aiohttp_cors import CorsConfig
 
-from ..handlers.services import ServiceHandler
+from handlers.services import ServiceHandler
 
 
 def setup_service_routes(app: web.Application, cors: CorsConfig = None):

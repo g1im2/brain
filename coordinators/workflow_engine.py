@@ -15,9 +15,9 @@ from enum import Enum
 from dataclasses import dataclass, field
 import threading
 
-from ..config import IntegrationConfig
-from ..exceptions import IntegrationException
-from ..adapters.strategy_adapter import StrategyAdapter
+from config import IntegrationConfig
+from exceptions import IntegrationException
+from adapters.strategy_adapter import StrategyAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -657,8 +657,8 @@ class WorkflowEngine:
         try:
             # 获取宏观适配器
             if not hasattr(self, '_macro_adapter') or self._macro_adapter is None:
-                from ..adapters.macro_adapter import MacroAdapter
-                from ..config import IntegrationConfig
+                from adapters.macro_adapter import MacroAdapter
+                from config import IntegrationConfig
 
                 # 使用默认配置或从kwargs获取配置
                 config = kwargs.get('config') or IntegrationConfig()
@@ -694,8 +694,8 @@ class WorkflowEngine:
         try:
             # 获取组合适配器
             if not hasattr(self, '_portfolio_adapter') or self._portfolio_adapter is None:
-                from ..adapters.portfolio_adapter import PortfolioAdapter
-                from ..config import IntegrationConfig
+                from adapters.portfolio_adapter import PortfolioAdapter
+                from config import IntegrationConfig
 
                 # 使用默认配置或从kwargs获取配置
                 config = kwargs.get('config') or IntegrationConfig()

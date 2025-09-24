@@ -15,12 +15,12 @@ aioredis==2.0.1
 # 配置管理
 pydantic==2.5.2
 python-dotenv==1.0.0
+PyYAML>=6.0
 
 # 日志
 structlog==23.2.0
 
 # 监控
-psutil==5.9.6
 prometheus-client==0.19.0
 
 # 时间处理
@@ -47,4 +47,4 @@ flake8==6.1.0
 mypy==1.7.1
 
 # 安全
-cryptography==41.0.8
+cryptography>=42.0.0

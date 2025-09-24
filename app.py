@@ -8,15 +8,15 @@ import logging
 from aiohttp import web
 from aiohttp_cors import setup as cors_setup, ResourceOptions
 
-from .config import IntegrationConfig
-from .middleware import setup_middleware
-from .routes import setup_routes
-from .coordinators.system_coordinator import SystemCoordinator
-from .scheduler.integration_scheduler import IntegrationScheduler
-from .adapters.service_registry import ServiceRegistry
-from .managers.data_flow_manager import DataFlowManager
-from .routers.signal_router import SignalRouter
-from .monitors.system_monitor import SystemMonitor
+from config import IntegrationConfig
+from middleware import setup_middleware
+from routes import setup_routes
+from coordinators.system_coordinator import SystemCoordinator
+from scheduler.integration_scheduler import IntegrationScheduler
+from adapters.service_registry import ServiceRegistry
+from managers.data_flow_manager import DataFlowManager
+from routers.signal_router import SignalRouter
+from monitors.system_monitor import SystemMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ async def init_components(app: web.Application, config: IntegrationConfig):
         # 定时任务调度器
         if config.service.scheduler_enabled:
             app['scheduler'] = IntegrationScheduler(config, app['coordinator'])
-        
+
         logger.info("Core components initialized successfully")
         
     except Exception as e:

@@ -4,7 +4,7 @@
 
 from aiohttp import web
 
-from .base import BaseHandler
+from handlers.base import BaseHandler
 
 
 class MonitoringHandler(BaseHandler):

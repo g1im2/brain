@@ -7,8 +7,8 @@ from datetime import datetime
 
 from aiohttp import web
 
-from .base import BaseHandler
-from ..routes import get_api_info
+from handlers.base import BaseHandler
+from api_info import get_api_info
 
 
 class HealthHandler(BaseHandler):

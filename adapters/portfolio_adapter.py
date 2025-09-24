@@ -9,11 +9,11 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
-from ..interfaces import ISystemAdapter
-from ..config import IntegrationConfig
-from ..exceptions import AdapterException, ConnectionException, HealthCheckException
-from .http_client import HttpClient
-from .portfolio_request_mapper import PortfolioRequestMapper
+from interfaces import ISystemAdapter
+from config import IntegrationConfig
+from exceptions import AdapterException, ConnectionException, HealthCheckException
+from adapters.http_client import HttpClient
+from adapters.portfolio_request_mapper import PortfolioRequestMapper
 
 logger = logging.getLogger(__name__)
 
@@ -354,11 +354,24 @@ class PortfolioAdapter(ISystemAdapter):
             raise AdapterException("PortfolioAdapter", f"Health check failed: {e}")
     
     def _validate_health_response(self, response: Dict[str, Any]) -> bool:
-        """验证健康检查响应"""
-        return (response.get('status') == 'healthy' and 
-                'timestamp' in response and 
-                response.get('system') == 'portfolio_management')
-    
+        """验证健康检查响应，兼容多种健康检查返回格式"""
+        try:
+            # 兼容 portfolio-service 返回: {status: success, data: {status: healthy, service: ...}}
+            status_top = response.get('status')
+            data = response.get('data', {}) if isinstance(response, dict) else {}
+            status_data = data.get('status')
+            service_name = response.get('system') or data.get('service')
+            timestamp = response.get('timestamp') or data.get('timestamp')
+
+            is_ok = (
+                (status_top == 'healthy') or (status_data == 'healthy') or (status_top == 'success' and status_data == 'healthy')
+            )
+            has_system = service_name in ('portfolio_management', 'portfolio-management', 'portfolio')
+            has_ts = timestamp is not None
+            return bool(is_ok and has_ts and has_system)
+        except Exception:
+            return False
+
     async def _send_portfolio_request(self, request: Any) -> Any:
         """发送组合系统请求"""
         if not self._http_client:

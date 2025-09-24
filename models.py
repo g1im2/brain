@@ -66,6 +66,7 @@ class SystemStatus:
     macro_system_status: SystemHealthStatus
     portfolio_system_status: SystemHealthStatus
     strategy_system_status: SystemHealthStatus
+    tactical_system_status: SystemHealthStatus
     data_pipeline_status: SystemHealthStatus
     last_update_time: datetime
     active_sessions: int = 0

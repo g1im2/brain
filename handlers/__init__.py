@@ -4,13 +4,13 @@ Integration Service 处理器模块
 包含所有API请求处理器。
 """
 
-from .health import HealthHandler
-from .system import SystemHandler
-from .services import ServiceHandler
-from .signals import SignalHandler
-from .dataflow import DataFlowHandler
-from .tasks import TaskHandler
-from .monitoring import MonitoringHandler
+from handlers.health import HealthHandler
+from handlers.system import SystemHandler
+from handlers.services import ServiceHandler
+from handlers.signals import SignalHandler
+from handlers.dataflow import DataFlowHandler
+from handlers.tasks import TaskHandler
+from handlers.monitoring import MonitoringHandler
 
 __all__ = [
     'HealthHandler',

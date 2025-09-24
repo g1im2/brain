@@ -10,9 +10,9 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from enum import Enum
 
-from ..models import StandardSignal
-from ..config import IntegrationConfig
-from ..exceptions import SignalConflictException
+from models import StandardSignal
+from config import IntegrationConfig
+from exceptions import SignalConflictException
 
 logger = logging.getLogger(__name__)
 

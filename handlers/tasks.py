@@ -4,7 +4,7 @@
 
 from aiohttp import web
 
-from .base import BaseHandler
+from handlers.base import BaseHandler
 
 
 class TaskHandler(BaseHandler):
@@ -23,20 +23,41 @@ class TaskHandler(BaseHandler):
     async def create_task(self, request: web.Request) -> web.Response:
         """创建定时任务"""
         try:
-            data = await self.get_request_json(request)
-            scheduler = self.get_app_component(request, 'scheduler')
-            
-            # 验证必需字段
+            # 强制要求 JSON 请求
+            ct = request.headers.get('Content-Type', '')
+            if 'application/json' not in ct:
+                return self.error_response("Content-Type must be application/json", 415, error_code="UNSUPPORTED_MEDIA_TYPE")
+
+            try:
+                data = await self.get_request_json(request)
+            except web.HTTPBadRequest:
+                return self.error_response("Invalid JSON format", 400, error_code="INVALID_JSON")
+
+            if not isinstance(data, dict) or not data:
+                return self.error_response("Invalid or empty JSON body", 400, error_code="INVALID_JSON")
+
+            # 基本字段校验
             error = self.validate_required_fields(data, ['name', 'cron', 'function'])
             if error:
-                return self.error_response(error, 400)
-            
+                return self.error_response(error, 400, error_code="MISSING_FIELDS")
+
+            # 类型与取值校验
+            if not isinstance(data.get('name'), str) or not data['name'].strip():
+                return self.error_response("'name' must be a non-empty string", 400, error_code="INVALID_NAME")
+            if not isinstance(data.get('cron'), str) or not data['cron'].strip():
+                return self.error_response("'cron' must be a non-empty string (e.g. 'every:1m', 'at:02:00')", 400, error_code="INVALID_CRON")
+            if not isinstance(data.get('function'), str) or not data['function'].strip():
+                return self.error_response("'function' must be a non-empty string", 400, error_code="INVALID_FUNCTION")
+
+            scheduler = self.get_app_component(request, 'scheduler')
             task = await scheduler.create_task(data)
             return self.success_response(task, "任务创建成功")
+        except web.HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Create task failed: {e}")
             return self.error_response("创建任务失败", 500)
-    
+
     async def get_task(self, request: web.Request) -> web.Response:
         """获取任务详情"""
         try:

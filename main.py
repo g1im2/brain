@@ -12,8 +12,8 @@ from pathlib import Path
 
 from aiohttp import web
 
-from .app import create_app
-from .config import IntegrationConfig
+from app import create_app
+from config import IntegrationConfig
 
 
 def setup_logging(config: IntegrationConfig):

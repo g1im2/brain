@@ -4,31 +4,29 @@ Integration Service 定时任务调度器
 基于asyncron实现的定时任务管理系统。
 """
 
+import asyncio
 import logging
-from datetime import datetime, date, timezone
-from typing import Dict, List, Any
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Callable
+import uuid
 
-# 导入asyncron模块
+# 导入本地asyncron模块
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '../external/asyncron'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../external/asyncron'))
 
-import asyncron
 from asyncron import (
-    create_planer,
-    add_planer,
+    Scheduler,
+    BluePrint,
+    PlansEvery,
+    TimeUnits,
     start_scheduler,
     stop_scheduler,
-    is_scheduler_running,
-    PlansAt,
-    PlansEvery,
-    TimeUnit,
-    TimeUnits,
-    TaskContext
+    is_scheduler_running
 )
 
-from ..config import IntegrationConfig
-from ..exceptions import AdapterException
+from config import IntegrationConfig
+from exceptions import AdapterException
 
 logger = logging.getLogger(__name__)
 
@@ -47,294 +45,241 @@ class IntegrationScheduler:
         self.coordinator = coordinator
         self._is_running = False
         self._task_history: List[Dict[str, Any]] = []
-
-        # 创建asyncron planer
-        self._planer = create_planer()
-
-        # 创建宏观数据任务调度器
-        from .macro_data_tasks import MacroDataTaskScheduler
-        self._macro_scheduler = MacroDataTaskScheduler(config, coordinator)
-
-        # 创建Portfolio数据任务调度器
-        from .portfolio_data_tasks import PortfolioDataTaskScheduler
-        self._portfolio_scheduler = PortfolioDataTaskScheduler(config, coordinator)
-
-        self._setup_default_tasks()
+        self._blueprint = None
+        # 自定义任务注册表: task_id -> {name, cron, function, enabled, payload}
+        self._managed_tasks: Dict[str, Dict[str, Any]] = {}
 
         logger.info("IntegrationScheduler initialized")
-    
-
 
     async def start(self):
         """启动调度器"""
         if self._is_running:
-            logger.warning("IntegrationScheduler is already running")
+            logger.info("Scheduler is already running")
             return
 
         try:
-            logger.info("Starting IntegrationScheduler...")
-
-            # 检查asyncron调度器状态
+            # 检查调度器是否已经在运行
             if is_scheduler_running():
-                logger.warning("Asyncron scheduler is already running, adding planers only")
-                # 只添加planer，不重新启动
-                add_planer(self._planer)
-                add_planer(self._macro_scheduler.get_planer())
-                add_planer(self._portfolio_scheduler.get_planer())
+                logger.info("Asyncron scheduler is already running")
                 self._is_running = True
-                logger.info("IntegrationScheduler started (asyncron already running)")
                 return
 
-            # 添加主planer到asyncron
-            add_planer(self._planer)
-
-            # 添加宏观数据任务planer到asyncron
-            add_planer(self._macro_scheduler.get_planer())
-
-            # 添加Portfolio数据任务planer到asyncron
-            add_planer(self._portfolio_scheduler.get_planer())
+            # 创建任务蓝图
+            self._blueprint = self._create_task_blueprint()
 
             # 启动asyncron调度器
-            start_scheduler()
+            start_scheduler([self._blueprint])
 
             self._is_running = True
-            logger.info("IntegrationScheduler started with macro and portfolio data tasks")
+            logger.info("IntegrationScheduler started successfully")
 
         except Exception as e:
             logger.error(f"Failed to start scheduler: {e}")
-            self._is_running = False
             raise
+
+    def _create_task_blueprint(self) -> BluePrint:
+        """创建任务蓝图: 包含默认任务 + 启用的自定义任务"""
+        blueprint = BluePrint()
+
+        # 默认任务：每日数据抓取（每天执行一次）
+        blueprint.task('/daily_data_fetch', plans=PlansEvery([TimeUnits.DAYS], [1]))(
+            self._trigger_daily_data_fetch
+        )
+
+        # 默认任务：系统健康检查（每30分钟执行一次）
+        blueprint.task('/system_health_check', plans=PlansEvery([TimeUnits.MINUTES], [30]))(
+            self._system_health_check
+        )
+
+        # 合并自定义任务（启用状态）
+        for task_id, t in self._managed_tasks.items():
+            if not t.get('enabled', True):
+                continue
+            plans = self._parse_cron_to_plans(t.get('cron'))
+            url = f"/custom/{task_id}"
+
+            async def _runner(context, _tid=task_id):
+                await self._execute_custom_task(self._managed_tasks.get(_tid, {}))
+
+            blueprint.task(url, plans=plans)(_runner)
+
+        logger.info("Task blueprint created with default and custom tasks")
+        return blueprint
 
     async def stop(self):
         """停止调度器"""
         if not self._is_running:
+            logger.info("Scheduler is not running")
             return
 
         try:
-            logger.info("Stopping IntegrationScheduler...")
-
-            # 使用新的停止函数
+            # 停止asyncron调度器
             success = stop_scheduler()
-            if not success:
-                logger.warning("Failed to stop asyncron scheduler gracefully")
-
-            self._is_running = False
-            logger.info("IntegrationScheduler stopped successfully")
+            if success:
+                self._is_running = False
+                logger.info("IntegrationScheduler stopped successfully")
+            else:
+                logger.warning("Failed to stop scheduler gracefully")
 
         except Exception as e:
             logger.error(f"Failed to stop scheduler: {e}")
-            # 即使出错也要设置停止标志
-            self._is_running = False
+            raise
 
-    def _setup_default_tasks(self):
-        """设置默认任务（使用Asyncron装饰器语法）"""
+    def _parse_cron_to_plans(self, cron: Optional[str]) -> Any:
+        """将简化的cron表达式转换为asyncron的Plans对象
+        支持格式：
+        - every:<n>s|m|h|d  例如 every:30m, every:1h
+        - at:HH:MM[:SS]    例如 at:02:00 或 at:02:00:00 （按天）
+        """
+        if not cron or not isinstance(cron, str):
+            # 默认每天一次
+            return PlansEvery([TimeUnits.DAYS], [1])
+        try:
+            cron = cron.strip().lower()
+            if cron.startswith('every:'):
+                val = cron.split(':', 1)[1]
+                num_str = ''.join(ch for ch in val if ch.isdigit()) or '1'
+                unit = ''.join(ch for ch in val if ch.isalpha()) or 'm'
+                n = int(num_str)
+                if unit in ('s', 'sec', 'secs', 'second', 'seconds'):
+                    return PlansEvery([TimeUnits.SECONDS], [n])
+                if unit in ('m', 'min', 'mins', 'minute', 'minutes'):
+                    return PlansEvery([TimeUnits.MINUTES], [n])
+                if unit in ('h', 'hour', 'hours'):
+                    return PlansEvery([TimeUnits.HOURS], [n])
+                if unit in ('d', 'day', 'days'):
+                    return PlansEvery([TimeUnits.DAYS], [n])
+                # 默认按分钟
+                return PlansEvery([TimeUnits.MINUTES], [n])
+            if cron.startswith('at:'):
+                # asyncron的"at"按天触发，使用PlansEvery + Timer.at 需要通过PlansAt来表达具体时间
+                from asyncron import PlansAt, TimeUnit
+                time_str = cron.split(':', 1)[1]
+                time_str = time_str if time_str.count(':') == 2 else (time_str + ":00")
+                return PlansAt([TimeUnit.DAY], [time_str])
+        except Exception:
+            pass
+        # 兜底：每小时一次
+        return PlansEvery([TimeUnits.HOURS], [1])
 
-        # ==================== 股票数据抓取任务 ====================
+    async def _restart_scheduler(self):
+        """应用任务变更：运行中则热更新新增蓝图，未运行则启动"""
+        try:
+            self._blueprint = self._create_task_blueprint()
+            if is_scheduler_running():
+                Scheduler.get_instance().add_plan(self._blueprint)
+                logger.info("Scheduler updated with new blueprint (hot-add)")
+            else:
+                start_scheduler([self._blueprint])
+                self._is_running = True
+                logger.info("Scheduler started with blueprint")
+        except Exception as e:
+            logger.error(f"Failed to apply scheduler update: {e}")
+            raise AdapterException("IntegrationScheduler", f"Scheduler update failed: {e}")
 
-        # 每日股票数据抓取任务 (18:00)
-        daily_stock_plan = PlansAt(
-            time_unit=[TimeUnit.DAY],
-            at=["18:00:00"]
-        )
+    async def create_task(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """创建自定义定时任务
+        需要字段: name, cron, function(字符串，标识要执行的功能)，可选payload
+        """
+        name = (data or {}).get('name')
+        cron = (data or {}).get('cron')
+        func = (data or {}).get('function')
+        if not name or not cron or not func:
+            raise AdapterException("IntegrationScheduler", "Missing required fields: name/cron/function")
+        task_id = str(uuid.uuid4())
+        self._managed_tasks[task_id] = {
+            'task_id': task_id,
+            'name': name,
+            'cron': cron,
+            'function': func,
+            'payload': data.get('payload'),
+            'enabled': True,
+            'created_at': datetime.utcnow().isoformat()
+        }
+        await self._restart_scheduler()
+        return self._managed_tasks[task_id]
 
-        @self._planer.task(url='/daily_stock_data_fetch', plans=daily_stock_plan)
-        async def daily_stock_data_fetch(context: TaskContext):
-            """每日股票数据抓取任务"""
-            await self._trigger_daily_data_fetch()
+    async def update_task(self, task_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """更新自定义任务配置并应用"""
+        if task_id not in self._managed_tasks:
+            raise AdapterException("IntegrationScheduler", f"Task not found: {task_id}")
+        t = self._managed_tasks[task_id]
+        for k in ('name', 'cron', 'function', 'payload', 'enabled'):
+            if k in data:
+                t[k] = data[k]
+        t['updated_at'] = datetime.utcnow().isoformat()
+        await self._restart_scheduler()
+        return t
 
-        # ==================== 宏观数据抓取任务 ====================
+    async def delete_task(self, task_id: str) -> bool:
+        """删除自定义任务：从注册表移除并重启调度器"""
+        if task_id not in self._managed_tasks:
+            raise AdapterException("IntegrationScheduler", f"Task not found: {task_id}")
+        self._managed_tasks.pop(task_id, None)
+        await self._restart_scheduler()
+        return True
 
-        # 每日宏观数据抓取任务 (18:30)
-        daily_macro_plan = PlansAt(
-            time_unit=[TimeUnit.DAY],
-            at=["18:30:00"]
-        )
+    async def toggle_task(self, task_id: str) -> Dict[str, Any]:
+        """切换任务启用状态并应用"""
+        if task_id not in self._managed_tasks:
+            raise AdapterException("IntegrationScheduler", f"Task not found: {task_id}")
+        t = self._managed_tasks[task_id]
+        t['enabled'] = not t.get('enabled', True)
+        t['updated_at'] = datetime.utcnow().isoformat()
+        await self._restart_scheduler()
+        return t
 
-        @self._planer.task(url='/daily_macro_data_fetch', plans=daily_macro_plan)
-        async def daily_macro_data_fetch(context: TaskContext):
-            """每日宏观数据抓取任务"""
-            await self._trigger_daily_macro_data_fetch()
 
-        # 每月宏观数据抓取任务 (每月1日 19:00)
-        monthly_macro_plan = PlansAt(
-            time_unit=[TimeUnit.DAY],
-            at=["19:00:00"]
-        )
-
-        @self._planer.task(url='/monthly_macro_data_fetch', plans=monthly_macro_plan)
-        async def monthly_macro_data_fetch(context: TaskContext):
-            """月度宏观数据抓取任务"""
-            # 只在每月1日执行
-            today = date.today()
-            if today.day == 1:
-                await self._trigger_monthly_macro_data_fetch()
-
-        # 季度宏观数据抓取任务 (每季度第一个月15日 19:30)
-        quarterly_macro_plan = PlansAt(
-            time_unit=[TimeUnit.DAY],
-            at=["19:30:00"]
-        )
-
-        @self._planer.task(url='/quarterly_macro_data_fetch', plans=quarterly_macro_plan)
-        async def quarterly_macro_data_fetch(context: TaskContext):
-            """季度宏观数据抓取任务"""
-            # 只在1月、4月、7月、10月的15日执行
-            today = date.today()
-            if today.day == 15 and today.month in [1, 4, 7, 10]:
-                await self._trigger_quarterly_macro_data_fetch()
-
-        # 年度宏观数据抓取任务 (每年1月15日 20:00)
-        yearly_macro_plan = PlansAt(
-            time_unit=[TimeUnit.DAY],
-            at=["20:00:00"]
-        )
-
-        @self._planer.task(url='/yearly_macro_data_fetch', plans=yearly_macro_plan)
-        async def yearly_macro_data_fetch(context: TaskContext):
-            """年度宏观数据抓取任务"""
-            # 只在每年1月15日执行
-            today = date.today()
-            if today.month == 1 and today.day == 15:
-                await self._trigger_yearly_macro_data_fetch()
-
-        # 完整分析周期任务 (19:00)
-        analysis_cycle_plan = PlansAt(
-            time_unit=[TimeUnit.DAY],
-            at=["19:00:00"]
-        )
-
-        @self._planer.task(url='/full_analysis_cycle', plans=analysis_cycle_plan)
-        async def full_analysis_cycle(context: TaskContext):
-            """完整分析周期任务"""
-            await self._trigger_analysis_cycle()
-
-        # 系统健康检查任务 (每30分钟)
-        health_check_plan = PlansEvery(
-            time_units=[TimeUnits.MINUTES],
-            every=[30]
-        )
-
-        @self._planer.task(url='/system_health_check', plans=health_check_plan)
-        async def system_health_check(context: TaskContext):
-            """系统健康检查任务"""
-            await self._system_health_check()
-
-        logger.info("Default tasks setup completed")
-
-        # 注册模块到asyncron
-        asyncron.register_mod('config', self.config)
-        asyncron.register_mod('coordinator', self.coordinator)
-        asyncron.register_mod('scheduler', self)
 
     async def get_all_tasks(self) -> List[Dict[str, Any]]:
         """获取所有任务"""
-        from .macro_data_config import MacroDataConfig
+        if not is_scheduler_running():
+            return []
 
-        # 基础任务
-        tasks = [
-            {'name': 'daily_stock_data_fetch', 'schedule': 'Daily at 18:00', 'status': 'active' if self._is_running else 'stopped'},
-            {'name': 'full_analysis_cycle', 'schedule': 'Daily at 19:00', 'status': 'active' if self._is_running else 'stopped'},
-            {'name': 'system_health_check', 'schedule': 'Every 30 minutes', 'status': 'active' if self._is_running else 'stopped'},
-        ]
-
-        # 添加14个独立的宏观数据任务
-        macro_tasks = [
-            # 日度任务
-            {'name': 'interest_rate_data_fetch', 'schedule': 'Daily at 18:30', 'type': 'daily'},
-            {'name': 'stock_index_data_fetch', 'schedule': 'Daily at 18:35', 'type': 'daily'},
-            {'name': 'market_flow_data_fetch', 'schedule': 'Daily at 18:40', 'type': 'daily'},
-            {'name': 'commodity_price_data_fetch', 'schedule': 'Daily at 18:45', 'type': 'daily'},
-
-            # 月度任务
-            {'name': 'price_index_data_fetch', 'schedule': 'Monthly on 1st at 19:00', 'type': 'monthly'},
-            {'name': 'money_supply_data_fetch', 'schedule': 'Monthly on 1st at 19:05', 'type': 'monthly'},
-            {'name': 'social_financing_data_fetch', 'schedule': 'Monthly on 1st at 19:10', 'type': 'monthly'},
-            {'name': 'investment_data_fetch', 'schedule': 'Monthly on 1st at 19:15', 'type': 'monthly'},
-            {'name': 'industrial_data_fetch', 'schedule': 'Monthly on 1st at 19:20', 'type': 'monthly'},
-            {'name': 'sentiment_index_data_fetch', 'schedule': 'Monthly on 1st at 19:25', 'type': 'monthly'},
-            {'name': 'inventory_cycle_data_fetch', 'schedule': 'Monthly on 1st at 19:30', 'type': 'monthly'},
-
-            # 季度任务
-            {'name': 'gdp_data_fetch', 'schedule': 'Quarterly on 15th at 19:35', 'type': 'quarterly'},
-
-            # 年度任务
-            {'name': 'innovation_data_fetch', 'schedule': 'Yearly on Jan 15th at 20:00', 'type': 'yearly'},
-            {'name': 'demographic_data_fetch', 'schedule': 'Yearly on Jan 15th at 20:05', 'type': 'yearly'},
-        ]
-
-        # 为宏观数据任务添加状态
-        for task in macro_tasks:
-            task['status'] = 'active' if self._is_running else 'stopped'
-
-        tasks.extend(macro_tasks)
-
-        # 添加Portfolio数据任务
-        portfolio_tasks = self._portfolio_scheduler.get_portfolio_tasks_info()
-        for task in portfolio_tasks:
-            task['status'] = 'active' if self._is_running else 'stopped'
-            task['category'] = 'portfolio'
-
-        tasks.extend(portfolio_tasks)
-        return tasks
+        try:
+            scheduler = Scheduler.get_instance()
+            tasks = scheduler.list_tasks()
+            return [
+                {
+                    'name': task.get_task_name(),
+                    'task_id': task.get_task_id(),
+                    'status': 'active' if self._is_running else 'stopped'
+                }
+                for task in tasks
+            ]
+        except Exception as e:
+            logger.error(f"Failed to get tasks: {e}")
+            return []
 
     async def get_task(self, task_id: str) -> Dict[str, Any]:
         """获取任务详情"""
-        tasks = await self.get_all_tasks()
-        for task in tasks:
-            if task['name'] == task_id:
-                return {
-                    'task_id': task_id,
-                    'name': task['name'],
-                    'schedule': task['schedule'],
-                    'status': task['status']
-                }
-        raise AdapterException(f"Task not found: {task_id}")
+        try:
+            scheduler = Scheduler.get_instance()
+            task = scheduler.get_task(task_id)
+            return {
+                'task_id': task_id,
+                'name': task.get_task_name(),
+                'status': 'active' if self._is_running else 'stopped'
+            }
+        except Exception as e:
+            raise AdapterException("IntegrationScheduler", f"Task not found: {task_id}")
 
     async def trigger_task(self, task_id: str) -> Dict[str, Any]:
         """手动触发任务"""
-        task_methods = {
-            'daily_stock_data_fetch': self._trigger_daily_data_fetch,
-            'daily_macro_data_fetch': self._trigger_daily_macro_data_fetch,
-            'monthly_macro_data_fetch': self._trigger_monthly_macro_data_fetch,
-            'quarterly_macro_data_fetch': self._trigger_quarterly_macro_data_fetch,
-            'yearly_macro_data_fetch': self._trigger_yearly_macro_data_fetch,
-            'full_analysis_cycle': self._trigger_analysis_cycle,
-            'system_health_check': self._system_health_check,
-        }
+        try:
+            scheduler = Scheduler.get_instance()
+            scheduler.start_task(task_id)
+            return {
+                'task_id': task_id,
+                'status': 'triggered',
+                'timestamp': datetime.utcnow().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Failed to trigger task {task_id}: {e}")
+            raise AdapterException("IntegrationScheduler", f"Task trigger failed: {e}")
 
-        # 检查是否为Portfolio任务
-        portfolio_tasks = [
-            'adj_factors_fetch',
-            'stock_basic_fetch',
-            'industry_classification_fetch',
-            'index_components_fetch',
-            'data_quality_check',
-            'full_data_rebuild'
-        ]
-
-        if task_id in task_methods:
-            try:
-                await task_methods[task_id]()
-                return {
-                    'task_id': task_id,
-                    'status': 'triggered',
-                    'timestamp': datetime.now().isoformat()
-                }
-            except Exception as e:
-                logger.error(f"Failed to trigger task {task_id}: {e}")
-                raise AdapterException(f"Task trigger failed: {e}")
-        elif task_id in portfolio_tasks:
-            try:
-                result = await self._portfolio_scheduler.trigger_task_manually(task_id)
-                return result
-            except Exception as e:
-                logger.error(f"Failed to trigger portfolio task {task_id}: {e}")
-                raise AdapterException(f"Portfolio task trigger failed: {e}")
-        else:
-            raise AdapterException(f"Task not found: {task_id}")
-    
     # 默认任务实现
-    async def _trigger_daily_data_fetch(self):
+    async def _trigger_daily_data_fetch(self, context):
         """触发每日数据抓取"""
         try:
             logger.info("Triggering daily data fetch...")
@@ -370,225 +315,18 @@ class IntegrationScheduler:
             logger.error(f"Daily data fetch failed: {e}")
             self._record_task_execution("daily_data_fetch", "failed", str(e))
 
-    # ==================== 宏观数据抓取任务 ====================
-
-    async def _trigger_daily_macro_data_fetch(self):
-        """触发日度宏观数据抓取"""
-        try:
-            logger.info("Triggering daily macro data fetch...")
-
-            # 获取FlowhubAdapter实例
-            flowhub_adapter = await self._get_flowhub_adapter()
-
-            if flowhub_adapter:
-                # 日度宏观数据类型
-                daily_data_types = [
-                    'interest-rate-data',
-                    'stock-index-data',
-                    'market-flow-data',
-                    'commodity-price-data'
-                ]
-
-                job_ids = []
-
-                # 为每种数据类型创建抓取任务
-                for data_type in daily_data_types:
-                    try:
-                        job_result = await flowhub_adapter.create_macro_data_job(
-                            data_type=data_type,
-                            incremental=True
-                        )
-
-                        job_id = job_result.get('job_id')
-                        if job_id:
-                            job_ids.append((data_type, job_id))
-                            logger.info(f"Daily macro data job created for {data_type}: {job_id}")
-
-                    except Exception as e:
-                        logger.error(f"Failed to create job for {data_type}: {e}")
-
-                # 记录任务执行结果
-                if job_ids:
-                    self._record_task_execution(
-                        "daily_macro_data_fetch",
-                        "completed",
-                        f"Created {len(job_ids)} daily macro data jobs: {[jid for _, jid in job_ids]}"
-                    )
-                else:
-                    self._record_task_execution(
-                        "daily_macro_data_fetch",
-                        "failed",
-                        "No jobs created"
-                    )
-
-            else:
-                logger.warning("FlowhubAdapter not available, skipping daily macro data fetch")
-                self._record_task_execution("daily_macro_data_fetch", "skipped", "FlowhubAdapter not available")
-
-        except Exception as e:
-            logger.error(f"Daily macro data fetch failed: {e}")
-            self._record_task_execution("daily_macro_data_fetch", "failed", str(e))
-
-    async def _trigger_monthly_macro_data_fetch(self):
-        """触发月度宏观数据抓取"""
-        try:
-            logger.info("Triggering monthly macro data fetch...")
-
-            flowhub_adapter = await self._get_flowhub_adapter()
-
-            if flowhub_adapter:
-                # 月度宏观数据类型
-                monthly_data_types = [
-                    'price-index-data',
-                    'money-supply-data',
-                    'social-financing-data',
-                    'investment-data',
-                    'industrial-data',
-                    'sentiment-index-data',
-                    'inventory-cycle-data'
-                ]
-
-                job_ids = []
-
-                for data_type in monthly_data_types:
-                    try:
-                        job_result = await flowhub_adapter.create_macro_data_job(
-                            data_type=data_type,
-                            incremental=True
-                        )
-
-                        job_id = job_result.get('job_id')
-                        if job_id:
-                            job_ids.append((data_type, job_id))
-                            logger.info(f"Monthly macro data job created for {data_type}: {job_id}")
-
-                    except Exception as e:
-                        logger.error(f"Failed to create job for {data_type}: {e}")
-
-                if job_ids:
-                    self._record_task_execution(
-                        "monthly_macro_data_fetch",
-                        "completed",
-                        f"Created {len(job_ids)} monthly macro data jobs"
-                    )
-                else:
-                    self._record_task_execution("monthly_macro_data_fetch", "failed", "No jobs created")
-
-            else:
-                logger.warning("FlowhubAdapter not available, skipping monthly macro data fetch")
-                self._record_task_execution("monthly_macro_data_fetch", "skipped", "FlowhubAdapter not available")
-
-        except Exception as e:
-            logger.error(f"Monthly macro data fetch failed: {e}")
-            self._record_task_execution("monthly_macro_data_fetch", "failed", str(e))
-
-    async def _trigger_quarterly_macro_data_fetch(self):
-        """触发季度宏观数据抓取"""
-        try:
-            logger.info("Triggering quarterly macro data fetch...")
-
-            flowhub_adapter = await self._get_flowhub_adapter()
-
-            if flowhub_adapter:
-                # 季度宏观数据类型
-                quarterly_data_types = [
-                    'gdp-data'
-                ]
-
-                job_ids = []
-
-                for data_type in quarterly_data_types:
-                    try:
-                        job_result = await flowhub_adapter.create_macro_data_job(
-                            data_type=data_type,
-                            incremental=True
-                        )
-
-                        job_id = job_result.get('job_id')
-                        if job_id:
-                            job_ids.append((data_type, job_id))
-                            logger.info(f"Quarterly macro data job created for {data_type}: {job_id}")
-
-                    except Exception as e:
-                        logger.error(f"Failed to create job for {data_type}: {e}")
-
-                if job_ids:
-                    self._record_task_execution(
-                        "quarterly_macro_data_fetch",
-                        "completed",
-                        f"Created {len(job_ids)} quarterly macro data jobs"
-                    )
-                else:
-                    self._record_task_execution("quarterly_macro_data_fetch", "failed", "No jobs created")
-
-            else:
-                logger.warning("FlowhubAdapter not available, skipping quarterly macro data fetch")
-                self._record_task_execution("quarterly_macro_data_fetch", "skipped", "FlowhubAdapter not available")
-
-        except Exception as e:
-            logger.error(f"Quarterly macro data fetch failed: {e}")
-            self._record_task_execution("quarterly_macro_data_fetch", "failed", str(e))
-
-    async def _trigger_yearly_macro_data_fetch(self):
-        """触发年度宏观数据抓取"""
-        try:
-            logger.info("Triggering yearly macro data fetch...")
-
-            flowhub_adapter = await self._get_flowhub_adapter()
-
-            if flowhub_adapter:
-                # 年度宏观数据类型
-                yearly_data_types = [
-                    'innovation-data',
-                    'demographic-data'
-                ]
-
-                job_ids = []
-
-                for data_type in yearly_data_types:
-                    try:
-                        job_result = await flowhub_adapter.create_macro_data_job(
-                            data_type=data_type,
-                            incremental=True
-                        )
-
-                        job_id = job_result.get('job_id')
-                        if job_id:
-                            job_ids.append((data_type, job_id))
-                            logger.info(f"Yearly macro data job created for {data_type}: {job_id}")
-
-                    except Exception as e:
-                        logger.error(f"Failed to create job for {data_type}: {e}")
-
-                if job_ids:
-                    self._record_task_execution(
-                        "yearly_macro_data_fetch",
-                        "completed",
-                        f"Created {len(job_ids)} yearly macro data jobs"
-                    )
-                else:
-                    self._record_task_execution("yearly_macro_data_fetch", "failed", "No jobs created")
-
-            else:
-                logger.warning("FlowhubAdapter not available, skipping yearly macro data fetch")
-                self._record_task_execution("yearly_macro_data_fetch", "skipped", "FlowhubAdapter not available")
-
-        except Exception as e:
-            logger.error(f"Yearly macro data fetch failed: {e}")
-            self._record_task_execution("yearly_macro_data_fetch", "failed", str(e))
-    
     async def _trigger_analysis_cycle(self):
         """触发完整分析周期"""
         try:
             logger.info("Triggering full analysis cycle...")
-            
+
             if self.coordinator:
                 result = await self.coordinator.coordinate_full_analysis_cycle()
                 self._record_task_execution("full_analysis_cycle", "completed", f"Analysis cycle: {result.cycle_id}")
             else:
                 logger.warning("No coordinator available for analysis cycle")
                 self._record_task_execution("full_analysis_cycle", "skipped", "No coordinator available")
-                
+
         except Exception as e:
             logger.error(f"Analysis cycle failed: {e}")
             self._record_task_execution("full_analysis_cycle", "failed", str(e))
@@ -618,58 +356,59 @@ class IntegrationScheduler:
         except Exception as e:
             logger.error(f"Failed to get FlowhubAdapter: {e}")
             return None
-    
-    async def _system_health_check(self):
+
+    async def _system_health_check(self, context):
         """系统健康检查"""
         try:
             logger.debug("Performing system health check...")
-            
+
             # 简化的健康检查
             health_status = "healthy" if self._is_running else "unhealthy"
             self._record_task_execution("system_health_check", "completed", f"System status: {health_status}")
-            
+
         except Exception as e:
             logger.error(f"System health check failed: {e}")
             self._record_task_execution("system_health_check", "failed", str(e))
-    
+
     async def _execute_custom_task(self, task_data: Dict[str, Any]):
         """执行自定义任务"""
         try:
             logger.info(f"Executing custom task: {task_data.get('name', 'unknown')}")
-            
+
             # 这里应该根据task_data中的function字段执行相应的功能
             # 暂时记录日志
-            self._record_task_execution(task_data.get('name', 'custom'), "completed", "Custom task executed")
-            
+            self._record_task_execution(task_data.get('name', 'custom'), "completed", "Custom task executed", task_data.get('task_id'))
+
         except Exception as e:
             logger.error(f"Custom task execution failed: {e}")
-            self._record_task_execution(task_data.get('name', 'custom'), "failed", str(e))
-    
-    def _record_task_execution(self, task_name: str, status: str, message: str):
+            self._record_task_execution(task_data.get('name', 'custom'), "failed", str(e), task_data.get('task_id'))
+
+    def _record_task_execution(self, task_name: str, status: str, message: str, task_id: Optional[str] = None):
         """记录任务执行历史"""
         execution_record = {
+            'task_id': task_id,
             'task_name': task_name,
             'status': status,
             'message': message,
-            'timestamp': datetime.now(timezone.utc).isoformat()
+            'timestamp': datetime.utcnow().isoformat()
         }
-        
+
         self._task_history.append(execution_record)
-        
+
         # 保持历史记录数量限制
         if len(self._task_history) > 1000:
             self._task_history = self._task_history[-500:]  # 保留最近500条
-        
+
         logger.info(f"Task execution recorded: {task_name} - {status}")
-    
+
     async def get_task_history(self, task_id: str, query_params: Dict[str, Any]) -> Dict[str, Any]:
         """获取任务执行历史"""
         limit = int(query_params.get('limit', 10))
         offset = int(query_params.get('offset', 0))
-        
+
         # 过滤指定任务的历史记录
-        task_history = [record for record in self._task_history if record['task_name'] == task_id]
-        
+        task_history = [record for record in self._task_history if record.get('task_id') == task_id or record.get('task_name') == task_id]
+
         return {
             'task_id': task_id,
             'history': task_history[offset:offset+limit],

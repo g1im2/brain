@@ -10,7 +10,7 @@ from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 import asyncio
 
-from .models import (
+from models import (
     AnalysisCycleResult,
     SystemStatus,
     MarketEvent,

@@ -13,18 +13,20 @@ from typing import Dict, List, Any, Optional, Set
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-from ..interfaces import ISystemCoordinator
-from ..models import (
+from interfaces import ISystemCoordinator
+from models import (
     AnalysisCycleResult, SystemStatus, MarketEvent, ResourceAllocation,
     ConflictResolution, SystemHealthStatus, EventType
 )
-from ..config import IntegrationConfig
-from ..exceptions import (
+from config import IntegrationConfig
+from exceptions import (
     SystemCoordinatorException, CycleExecutionException,
     ResourceAllocationException, handle_exception
 )
-from ..adapters.strategy_adapter import StrategyAdapter
-from ..managers.data_flow_manager import DataFlowManager
+from adapters.strategy_adapter import StrategyAdapter
+from adapters.macro_adapter import MacroAdapter
+from adapters.portfolio_adapter import PortfolioAdapter
+from managers.data_flow_manager import DataFlowManager
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,7 @@ class SystemCoordinator(ISystemCoordinator):
             macro_system_status=SystemHealthStatus.HEALTHY,
             portfolio_system_status=SystemHealthStatus.HEALTHY,
             strategy_system_status=SystemHealthStatus.HEALTHY,
+            tactical_system_status=SystemHealthStatus.HEALTHY,
             data_pipeline_status=SystemHealthStatus.HEALTHY,
             last_update_time=datetime.now()
         )
@@ -403,7 +406,6 @@ class SystemCoordinator(ISystemCoordinator):
         try:
             # 获取宏观适配器
             if not hasattr(self, '_macro_adapter') or self._macro_adapter is None:
-                from ..adapters.macro_adapter import MacroAdapter
                 self._macro_adapter = MacroAdapter(self.config)
                 await self._macro_adapter.connect_to_system()
 
@@ -428,9 +430,6 @@ class SystemCoordinator(ISystemCoordinator):
         try:
             # 获取组合适配器
             if not hasattr(self, '_portfolio_adapter') or self._portfolio_adapter is None:
-                from ..adapters.portfolio_adapter import PortfolioAdapter
-                from ..config import IntegrationConfig
-
                 # 使用默认配置或从现有配置获取
                 config = getattr(self, 'config', IntegrationConfig())
                 self._portfolio_adapter = PortfolioAdapter(config)
@@ -596,7 +595,6 @@ class SystemCoordinator(ISystemCoordinator):
         try:
             # 获取宏观适配器
             if not hasattr(self, '_macro_adapter') or self._macro_adapter is None:
-                from ..adapters.macro_adapter import MacroAdapter
                 self._macro_adapter = MacroAdapter(self.config)
                 await self._macro_adapter.connect_to_system()
 
@@ -619,9 +617,6 @@ class SystemCoordinator(ISystemCoordinator):
         try:
             # 获取组合适配器
             if not hasattr(self, '_portfolio_adapter') or self._portfolio_adapter is None:
-                from ..adapters.portfolio_adapter import PortfolioAdapter
-                from ..config import IntegrationConfig
-
                 config = getattr(self, 'config', IntegrationConfig())
                 self._portfolio_adapter = PortfolioAdapter(config)
                 await self._portfolio_adapter.connect_to_system()

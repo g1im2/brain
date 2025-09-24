@@ -5,7 +5,7 @@
 from aiohttp import web
 from aiohttp_cors import CorsConfig
 
-from ..handlers.health import HealthHandler
+from handlers.health import HealthHandler
 
 
 def setup_health_routes(app: web.Application, cors: CorsConfig = None):

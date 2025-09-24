@@ -5,7 +5,7 @@
 from aiohttp import web
 from aiohttp_cors import CorsConfig
 
-from ..handlers.dataflow import DataFlowHandler
+from handlers.dataflow import DataFlowHandler
 
 
 def setup_dataflow_routes(app: web.Application, cors: CorsConfig = None):

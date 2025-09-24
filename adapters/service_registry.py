@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 
 import aiohttp
 
-from ..config import IntegrationConfig
-from ..exceptions import AdapterException
+from config import IntegrationConfig
+from exceptions import AdapterException
 
 
 class ServiceRegistry:
@@ -48,7 +48,7 @@ class ServiceRegistry:
             'portfolio': {
                 'name': 'portfolio',
                 'url': self.config.service.portfolio_service_url,
-                'health_endpoint': '/health',
+                'health_endpoint': '/api/v1/health',
                 'api_prefix': '/api/v1/portfolio',
                 'status': 'unknown',
                 'last_check': None,
@@ -117,13 +117,21 @@ class ServiceRegistry:
         Returns:
             Dict[str, Any]: 服务信息字典
         """
+        # 将不可序列化的字段（如datetime）转换为可序列化格式
+        services_list = []
+        for s in self._services.values():
+            sd = s.copy()
+            lc = sd.get('last_check')
+            if isinstance(lc, datetime):
+                sd['last_check'] = lc.isoformat()
+            services_list.append(sd)
         return {
-            'services': list(self._services.values()),
+            'services': services_list,
             'total_count': len(self._services),
             'healthy_count': len([s for s in self._services.values() if s['status'] == 'healthy']),
             'unhealthy_count': len([s for s in self._services.values() if s['status'] == 'unhealthy'])
         }
-    
+
     async def get_service_status(self, service_name: str) -> Dict[str, Any]:
         """获取服务状态
         
@@ -140,9 +148,14 @@ class ServiceRegistry:
         
         # 执行实时健康检查
         await self._check_service_health(service_name)
-        
-        return service.copy()
-    
+
+        # 返回可序列化拷贝
+        sd = service.copy()
+        lc = sd.get('last_check')
+        if isinstance(lc, datetime):
+            sd['last_check'] = lc.isoformat()
+        return sd
+
     async def health_check_service(self, service_name: str) -> Dict[str, Any]:
         """执行服务健康检查
         

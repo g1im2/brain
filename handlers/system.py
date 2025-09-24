@@ -4,7 +4,7 @@
 
 from aiohttp import web
 
-from .base import BaseHandler
+from handlers.base import BaseHandler
 
 
 class SystemHandler(BaseHandler):
@@ -28,12 +28,12 @@ class SystemHandler(BaseHandler):
                     "系统已经在运行中"
                 )
             
-            # 启动系统协调器
-            startup_result = await coordinator.coordinate_system_startup()
-            
-            if startup_result:
+            # 启动系统协调器（包含初始化适配器与数据流管理器，并执行启动协调）
+            started = await coordinator.start()
+
+            if started:
                 return self.success_response(
-                    {'status': 'started', 'startup_result': startup_result},
+                    {'status': 'started'},
                     "系统启动成功"
                 )
             else:

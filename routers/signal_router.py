@@ -13,16 +13,16 @@ from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict, deque
 import threading
 
-from ..interfaces import ISignalRouter
-from ..models import SignalRoutingResult, StandardSignal, EventType
-from ..config import IntegrationConfig
-from ..exceptions import (
-    SignalRouterException, SignalConflictException, 
+from interfaces import ISignalRouter
+from models import SignalRoutingResult, StandardSignal, EventType
+from config import IntegrationConfig
+from exceptions import (
+    SignalRouterException, SignalConflictException,
     SignalValidationException, handle_exception
 )
-from .conflict_resolver import ConflictResolver
-from .signal_processor import SignalProcessor
-from ..adapters.strategy_adapter import StrategyAdapter
+from routers.conflict_resolver import ConflictResolver
+from routers.signal_processor import SignalProcessor
+from adapters.strategy_adapter import StrategyAdapter
 
 logger = logging.getLogger(__name__)
 
