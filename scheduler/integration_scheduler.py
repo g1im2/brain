@@ -10,19 +10,13 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Callable
 import uuid
 
-# 导入本地asyncron模块
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../external/asyncron'))
 
 from asyncron import (
     Scheduler,
     BluePrint,
     PlansEvery,
     TimeUnits,
-    start_scheduler,
-    stop_scheduler,
-    is_scheduler_running
+    start_scheduler
 )
 
 from config import IntegrationConfig
@@ -58,11 +52,6 @@ class IntegrationScheduler:
             return
 
         try:
-            # 检查调度器是否已经在运行
-            if is_scheduler_running():
-                logger.info("Asyncron scheduler is already running")
-                self._is_running = True
-                return
 
             # 创建任务蓝图
             self._blueprint = self._create_task_blueprint()
@@ -113,8 +102,15 @@ class IntegrationScheduler:
             return
 
         try:
-            # 停止asyncron调度器
-            success = stop_scheduler()
+            # 停止asyncron调度器（兼容本地实现）
+            success = False
+            try:
+                sched = Scheduler.get_instance()
+                loop_thread = getattr(sched, "_Scheduler__loop_thread", None)
+                if loop_thread and hasattr(loop_thread, "cancel"):
+                    success = loop_thread.cancel()
+            except Exception:
+                success = False
             if success:
                 self._is_running = False
                 logger.info("IntegrationScheduler stopped successfully")
@@ -166,7 +162,7 @@ class IntegrationScheduler:
         """应用任务变更：运行中则热更新新增蓝图，未运行则启动"""
         try:
             self._blueprint = self._create_task_blueprint()
-            if is_scheduler_running():
+            if self._is_running:
                 Scheduler.get_instance().add_plan(self._blueprint)
                 logger.info("Scheduler updated with new blueprint (hot-add)")
             else:
@@ -233,7 +229,7 @@ class IntegrationScheduler:
 
     async def get_all_tasks(self) -> List[Dict[str, Any]]:
         """获取所有任务"""
-        if not is_scheduler_running():
+        if not self._is_running:
             return []
 
         try:
