@@ -10,16 +10,28 @@ from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 import asyncio
 
-from models import (
-    AnalysisCycleResult,
-    SystemStatus,
-    MarketEvent,
-    ValidationResult,
-    SignalRoutingResult,
-    DataFlowStatus,
-    ResourceAllocation,
-    ConflictResolution
-)
+try:
+    from .models import (
+        AnalysisCycleResult,
+        SystemStatus,
+        MarketEvent,
+        ValidationResult,
+        SignalRoutingResult,
+        DataFlowStatus,
+        ResourceAllocation,
+        ConflictResolution
+    )
+except Exception:  # 兼容在容器内以脚本方式运行（无包上下文）
+    from models import (
+        AnalysisCycleResult,
+        SystemStatus,
+        MarketEvent,
+        ValidationResult,
+        SignalRoutingResult,
+        DataFlowStatus,
+        ResourceAllocation,
+        ConflictResolution
+    )
 
 
 class ISystemCoordinator(ABC):

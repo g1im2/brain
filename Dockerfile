@@ -57,6 +57,7 @@ COPY --from=builder --chown=brain:brain /app/routers/ ./routers/
 COPY --from=builder --chown=brain:brain /app/routes/ ./routes/
 COPY --from=builder --chown=brain:brain /app/scheduler/ ./scheduler/
 COPY --from=builder --chown=brain:brain /app/validators/ ./validators/
+COPY --from=builder --chown=brain:brain /app/initializers/ ./initializers/
 
 # 创建必要的目录
 RUN mkdir -p logs data config && chown -R brain:brain logs data config

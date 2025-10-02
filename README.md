@@ -177,6 +177,68 @@ LOG_LEVEL=INFO
 LOG_FILE=logs/integration.log
 ```
 
+## 启动数据初始化功能（Brain → Flowhub）
+
+为确保首次部署或重启后系统具备可用的基础数据，Brain 在服务启动后可异步触发一次“数据初始化”。该过程与 Flowhub 服务交互，按阶段批量拉取基础数据，且不阻塞对外 API。
+
+- 初始化阶段顺序：股票基础 → 宏观核心 → 股票历史 → 其他宏观
+- 并发控制：每阶段可配置并发度，避免对 Flowhub 造成瞬时压力
+- 幂等与断点续传：进度持久化，重复启动不会重复初始化
+- 失败重试：依赖服务不可用时指数退避重试，超过阈值后降级等待定时任务补齐
+
+### 新增配置（环境变量）
+
+```bash
+# 是否在启动后自动触发初始化
+INIT_DATA_ON_STARTUP=true|false  # 默认 true
+
+# 初始化前等待的依赖（逗号分隔），目前支持 flowhub
+INIT_WAIT_DEPENDENCIES=flowhub   # 默认 flowhub
+
+# 首次运行是否允许最长历史范围（由 Flowhub 智能增量判断起点）
+INIT_MAX_HISTORY_FIRST_RUN=true|false  # 默认 true
+
+# 单阶段抓取并发度
+INIT_CONCURRENCY=2  # 默认 2
+```
+
+> 以上环境变量映射到 config.ServiceConfig 中的对应字段，支持通过 docker-compose 或 k8s 注入。
+
+### 运行与验证（本地/Compose）
+
+```bash
+# 单独启动 Brain（需要提供 FLOWHUB_SERVICE_URL 指向 Flowhub）
+export FLOWHUB_SERVICE_URL=http://localhost:8080
+export INIT_DATA_ON_STARTUP=true
+python -m services.brain.main
+
+# 或使用项目内的示例 compose（构建并启动 brain + flowhub）
+docker compose -f docker-compose.init.yml up -d --build
+
+# 健康与进度检查
+curl -s http://localhost:8088/health
+curl -s http://localhost:8088/api/v1/system/init/status | jq .
+
+# 提供一个简单的冒烟脚本
+scripts/init_smoke_test.sh
+```
+
+接口：
+- GET /api/v1/system/init/status
+  - 返回是否启用、当前进度、各阶段状态、错误信息等
+
+### 部署注意事项
+- 初始化过程为后台任务，不阻塞服务启动；首启建议在业务低峰进行
+- 确保 Brain 容器具备写入 /data/brain（或项目配置的持久化目录）权限，用于存放 init_state.json
+- 根据环境资源适当调小 INIT_CONCURRENCY（建议 2~4）
+- 若不希望首启进行较长历史拉取，可设置 INIT_MAX_HISTORY_FIRST_RUN=false（仍与 Flowhub 智能增量兼容）
+
+### 故障排除（初始化相关）
+- INIT 状态一直未开始：检查 Brain 日志与 /health，确认是否已通过健康检查；检查 Flowhub /health
+- INIT 状态失败：查看 status 中的 errors 列表；重启后会断点续传
+- 环境变量未生效：检查大小写、是否被部署编排覆盖；也可通过 GET /api/v1/services/brain/config（若有）核验
+
+
 ## 快速开始
 
 ### 开发环境

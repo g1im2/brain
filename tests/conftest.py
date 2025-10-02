@@ -4,6 +4,13 @@
 提供测试所需的通用配置和夹具。
 """
 
+import os, sys
+# 保证仓库根目录在 sys.path，便于以 `services.*` 为前缀的绝对导入
+sys.path.insert(0, os.path.abspath('.'))
+# :  tests  old-style  from adapters import ...
+sys.path.insert(0, os.path.abspath('services/brain'))
+
+
 import asyncio
 import pytest
 import pytest_asyncio
@@ -27,14 +34,14 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
 def test_config() -> IntegrationConfig:
     """测试配置"""
     config = IntegrationConfig(environment="testing")
-    
+
     # 覆盖测试特定配置
     config.system_coordinator.max_concurrent_cycles = 1
     config.system_coordinator.cycle_timeout = 10
     config.signal_router.max_signal_queue_size = 10
     config.data_flow_manager.cache_size_mb = 10
     config.monitoring.enable_alerting = False
-    
+
     return config
 
 
@@ -145,13 +152,13 @@ def mock_macro_adapter():
 
 class AsyncContextManagerMock:
     """异步上下文管理器模拟"""
-    
+
     def __init__(self, return_value=None):
         self.return_value = return_value
-    
+
     async def __aenter__(self):
         return self.return_value
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
 
@@ -189,7 +196,7 @@ def pytest_collection_modifyitems(config, items):
         # 为异步测试添加标记
         if asyncio.iscoroutinefunction(item.function):
             item.add_marker(pytest.mark.asyncio)
-        
+
         # 根据文件路径添加标记
         if "unit" in str(item.fspath):
             item.add_marker(pytest.mark.unit)

@@ -21,25 +21,25 @@ logger = logging.getLogger(__name__)
 
 class StrategyAdapter(ISystemAdapter):
     """策略分析系统适配器实现类
-    
+
     提供与策略分析系统的标准化接口，
     负责策略分析、回测验证、实时验证请求的发送和结果的接收处理。
     """
-    
+
     def __init__(self, config: IntegrationConfig):
         """初始化策略适配器
-        
+
         Args:
             config: 集成配置对象
         """
         self.config = config
         self._is_connected = False
         self._last_health_check = None
-        
+
         # HTTP客户端和请求映射器
         self._http_client: Optional[HttpClient] = None
         self._request_mapper = ExecutionRequestMapper()
-        
+
         # 策略系统配置
         self._strategy_system_config = {
             'endpoint': 'strategy_analysis',
@@ -47,7 +47,7 @@ class StrategyAdapter(ISystemAdapter):
             'max_retries': self.config.adapter.max_retries,
             'retry_delay': self.config.adapter.retry_delay
         }
-        
+
         # 请求统计
         self._request_statistics = {
             'total_requests': 0,
@@ -55,7 +55,7 @@ class StrategyAdapter(ISystemAdapter):
             'failed_requests': 0,
             'average_response_time': 0.0
         }
-        
+
         # 分析器状态 (映射到execution服务的分析器名称)
         self._analyzer_status = {
             'livermore': 'active',
@@ -63,42 +63,42 @@ class StrategyAdapter(ISystemAdapter):
             'dow_theory': 'active',
             'hong_hao': 'active'
         }
-        
+
         logger.info("StrategyAdapter initialized with HTTP client integration")
-    
+
     async def connect_to_system(self) -> bool:
         """连接到策略分析系统
-        
+
         Returns:
             bool: 连接是否成功
         """
         try:
             logger.info("Connecting to strategy analysis system...")
-            
+
             # 初始化HTTP客户端
             if not self._http_client:
                 self._http_client = HttpClient('execution', self.config)
-            
+
             # 检查分析器状态
             await self._check_analyzers_status()
-            
+
             # 执行初始健康检查
             health_status = await self.health_check()
             if not health_status:
                 raise ConnectionException("StrategyAdapter", "strategy_analysis", "Health check failed")
-            
+
             self._is_connected = True
             logger.info("Successfully connected to strategy analysis system")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to connect to strategy analysis system: {e}")
             self._is_connected = False
             raise ConnectionException("StrategyAdapter", "strategy_analysis", str(e))
-    
+
     async def disconnect_from_system(self) -> bool:
         """断开与策略分析系统的连接
-        
+
         Returns:
             bool: 断开是否成功
         """
@@ -106,63 +106,63 @@ class StrategyAdapter(ISystemAdapter):
             if self._http_client:
                 await self._http_client.close()
                 self._http_client = None
-            
+
             self._is_connected = False
             logger.info("Disconnected from strategy analysis system")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to disconnect from strategy analysis system: {e}")
             return False
-    
+
     async def health_check(self) -> bool:
         """健康检查
-        
+
         Returns:
             bool: 系统是否健康
         """
         try:
             if not self._http_client:
                 raise HealthCheckException("StrategyAdapter", "strategy_analysis", "HTTP client not initialized")
-            
+
             start_time = datetime.now()
-            
+
             # 发送健康检查请求到execution服务
             response = await self._http_client.get('/health')
-            
+
             # 验证响应
             is_healthy = self._validate_health_response(response)
-            
+
             self._last_health_check = datetime.now()
             response_time = (self._last_health_check - start_time).total_seconds()
-            
+
             if is_healthy:
                 logger.debug(f"Strategy system health check passed, response time: {response_time:.3f}s")
             else:
                 logger.warning("Strategy system health check failed")
                 raise HealthCheckException("StrategyAdapter", "strategy_analysis", "unhealthy")
-            
+
             return is_healthy
-            
+
         except HealthCheckException:
             raise
         except Exception as e:
             logger.error(f"Strategy system health check error: {e}")
             raise HealthCheckException("StrategyAdapter", "strategy_analysis", str(e))
-    
+
     async def get_system_status(self) -> Dict[str, Any]:
         """获取系统状态
-        
+
         Returns:
             Dict[str, Any]: 系统状态信息
         """
         try:
             if not self._http_client:
                 raise AdapterException("StrategyAdapter", "HTTP client not initialized")
-            
+
             # 获取execution服务的系统状态
-            response = await self._http_client.get('/system/status')
-            
+            response = await self._http_client.get('system/status')
+
             return {
                 'system': 'strategy_analysis',
                 'status': response.get('status', 'unknown'),
@@ -172,7 +172,7 @@ class StrategyAdapter(ISystemAdapter):
                 'statistics': self._request_statistics.copy(),
                 'response_data': response
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to get strategy system status: {e}")
             return {
@@ -182,102 +182,102 @@ class StrategyAdapter(ISystemAdapter):
                 'is_connected': self._is_connected,
                 'analyzer_status': self._analyzer_status.copy()
             }
-    
+
     async def send_request(self, request: Any) -> Any:
         """发送请求
-        
+
         Args:
             request: 请求对象
-            
+
         Returns:
             Any: 响应结果
         """
         if not self._is_connected:
             raise AdapterException("StrategyAdapter", "Not connected to strategy system")
-        
+
         if not self._http_client:
             raise AdapterException("StrategyAdapter", "HTTP client not initialized")
-        
+
         start_time = datetime.now()
         retry_count = 0
         max_retries = self._strategy_system_config['max_retries']
-        
+
         while retry_count <= max_retries:
             try:
                 self._request_statistics['total_requests'] += 1
-                
+
                 # 使用请求映射器转换请求格式
                 mapped_request = self._request_mapper.map_strategy_analysis_request(request)
-                
+
                 # 发送请求到execution服务
                 response = await self._http_client.post('analyze/batch', mapped_request)
-                
+
                 # 处理响应
                 processed_response = await self.handle_response(response)
-                
+
                 # 更新统计
                 response_time = (datetime.now() - start_time).total_seconds()
                 self._update_request_statistics(True, response_time)
-                
+
                 logger.debug(f"Strategy request completed successfully, response time: {response_time:.3f}s")
                 return processed_response
-                
+
             except Exception as e:
                 retry_count += 1
                 if retry_count > max_retries:
                     self._update_request_statistics(False, 0)
                     logger.error(f"Strategy request failed after {max_retries} retries: {e}")
                     raise AdapterException("StrategyAdapter", f"Request failed: {e}")
-                
+
                 # 等待重试
                 await asyncio.sleep(self._strategy_system_config['retry_delay'] * retry_count)
                 logger.warning(f"Strategy request failed, retrying ({retry_count}/{max_retries}): {e}")
-    
+
     async def handle_response(self, response: Any) -> Any:
         """处理响应
-        
+
         Args:
             response: 响应对象
-            
+
         Returns:
             Any: 处理后的结果
         """
         try:
             # 使用请求映射器转换响应格式
             mapped_response = self._request_mapper.map_analysis_response(response)
-            
+
             # 验证响应格式
             if not self._validate_response_format(mapped_response):
                 raise AdapterException("StrategyAdapter", "Invalid response format")
-            
+
             # 提取分析结果数据
             analysis_results = self._extract_analysis_results(mapped_response)
-            
+
             # 标准化数据格式
             standardized_results = self._standardize_analysis_results(analysis_results)
-            
+
             return standardized_results
-            
+
         except Exception as e:
             logger.error(f"Failed to handle strategy response: {e}")
             raise AdapterException("StrategyAdapter", f"Response handling failed: {e}")
-    
+
     def get_request_statistics(self) -> Dict[str, Any]:
         """获取请求统计信息
-        
+
         Returns:
             Dict[str, Any]: 请求统计
         """
         return self._request_statistics.copy()
-    
+
     def get_analyzer_status(self) -> Dict[str, str]:
         """获取分析器状态
-        
+
         Returns:
             Dict[str, str]: 分析器状态
         """
         return self._analyzer_status.copy()
-    
+
     def _update_request_statistics(self, success: bool, response_time: float) -> None:
         """更新请求统计"""
         if success:
@@ -295,12 +295,13 @@ class StrategyAdapter(ISystemAdapter):
 
     # 主要业务方法
     async def request_strategy_analysis(self, portfolio_instruction: Dict[str, Any],
-                                      symbols: List[str]) -> List[Dict[str, Any]]:
+                                      symbols: List[str], callback_url: Optional[str] = None) -> List[Dict[str, Any]]:
         """请求策略分析
 
         Args:
             portfolio_instruction: 组合指令
             symbols: 股票代码列表
+            callback_url: 批量分析完成后用于回调通知的URL（可选）
 
         Returns:
             List[Dict[str, Any]]: 分析结果列表
@@ -314,6 +315,9 @@ class StrategyAdapter(ISystemAdapter):
                 'request_id': f"strategy_req_{datetime.now().timestamp()}"
             }
 
+            if callback_url:
+                request['callback_url'] = callback_url
+
             response = await self.send_request(request)
 
             logger.info(f"Strategy analysis completed for {len(symbols)} symbols, request: {request['request_id']}")
@@ -324,7 +328,7 @@ class StrategyAdapter(ISystemAdapter):
             raise AdapterException("StrategyAdapter", f"Analysis request failed: {e}")
 
     async def request_backtest_validation(self, symbols: List[str],
-                                        strategy_config: Dict[str, Any]) -> Dict[str, Any]:
+                                        strategy_config: Dict[str, Any], callback_url: Optional[str] = None) -> Dict[str, Any]:
         """请求回测验证
 
         Args:
@@ -339,13 +343,16 @@ class StrategyAdapter(ISystemAdapter):
                 raise AdapterException("StrategyAdapter", "HTTP client not initialized")
 
             # 构造回测请求
-            backtest_request = self._request_mapper.map_backtest_request({
+            backtest_request_payload = {
                 'symbols': symbols,
                 'strategy_config': strategy_config
-            })
+            }
+            if callback_url:
+                backtest_request_payload['callback_url'] = callback_url
+            backtest_request = self._request_mapper.map_backtest_request(backtest_request_payload)
 
             # 发送回测请求
-            response = await self._http_client.post('/backtest/run', backtest_request)
+            response = await self._http_client.post('backtest/run', backtest_request)
 
             # 如果是异步任务，需要轮询结果
             if response.get('success') and 'task_id' in response.get('data', {}):
@@ -383,13 +390,13 @@ class StrategyAdapter(ISystemAdapter):
             })
 
             # 创建股票池
-            response = await self._http_client.post('/quantum/pool/create', pool_request)
+            response = await self._http_client.post('quantum/pool/create', pool_request)
 
             if response.get('success'):
                 pool_id = response.get('data', {}).get('pool_id')
                 if pool_id:
                     # 获取股票池状态
-                    status_response = await self._http_client.get(f'/quantum/pool/{pool_id}/status')
+                    status_response = await self._http_client.get(f'quantum/pool/{pool_id}/status')
                     return {
                         'status': 'success',
                         'data': {
@@ -404,6 +411,74 @@ class StrategyAdapter(ISystemAdapter):
         except Exception as e:
             logger.error(f"Realtime validation request failed: {e}")
             raise AdapterException("StrategyAdapter", f"Realtime validation failed: {e}")
+
+
+    async def query_analysis_history(self,
+                                     symbol: str,
+                                     start_date: Optional[str] = None,
+                                     end_date: Optional[str] = None,
+                                     analyzer_type: Optional[str] = None,
+                                     page: int = 1,
+                                     page_size: int = 20,
+                                     sort_by: str = 'analysis_date',
+                                     sort_order: str = 'desc',
+                                     signal: Optional[str] = None,
+                                     min_confidence: Optional[float] = None,
+                                     max_confidence: Optional[float] = None) -> Dict[str, Any]:
+        """通过 Execution 查询分析历史（分页/排序/过滤）"""
+        if not self._http_client:
+            raise AdapterException("StrategyAdapter", "HTTP client not initialized")
+        params: Dict[str, Any] = {
+            'symbol': symbol,
+            'page': page,
+            'page_size': page_size,
+            'sort_by': sort_by,
+            'sort_order': sort_order
+        }
+        if start_date:
+            params['start_date'] = start_date
+        if end_date:
+            params['end_date'] = end_date
+        if analyzer_type:
+            params['analyzer_type'] = analyzer_type
+        if signal:
+            params['signal'] = signal
+        if min_confidence is not None:
+            params['min_confidence'] = min_confidence
+        if max_confidence is not None:
+            params['max_confidence'] = max_confidence
+        return await self._http_client.get('analyze/history', params=params)
+
+    async def query_backtest_history(self,
+                                     strategy_type: Optional[str] = None,
+                                     start_date: Optional[str] = None,
+                                     end_date: Optional[str] = None,
+                                     page: int = 1,
+                                     page_size: int = 20,
+                                     sort_by: str = 'created_at',
+                                     sort_order: str = 'desc',
+                                     min_total_return: Optional[float] = None,
+                                     max_drawdown: Optional[float] = None) -> Dict[str, Any]:
+        """通过 Execution 查询回测历史（分页/排序/过滤）"""
+        if not self._http_client:
+            raise AdapterException("StrategyAdapter", "HTTP client not initialized")
+        params: Dict[str, Any] = {
+            'page': page,
+            'page_size': page_size,
+            'sort_by': sort_by,
+            'sort_order': sort_order
+        }
+        if strategy_type:
+            params['strategy_type'] = strategy_type
+        if start_date:
+            params['start_date'] = start_date
+        if end_date:
+            params['end_date'] = end_date
+        if min_total_return is not None:
+            params['min_total_return'] = min_total_return
+        if max_drawdown is not None:
+            params['max_drawdown'] = max_drawdown
+        return await self._http_client.get('backtest/history', params=params)
 
     # 私有辅助方法
     async def _poll_backtest_result(self, task_id: str, max_wait_time: int = 300) -> Dict[str, Any]:
@@ -420,7 +495,7 @@ class StrategyAdapter(ISystemAdapter):
 
         while (datetime.now() - start_time).total_seconds() < max_wait_time:
             try:
-                response = await self._http_client.get(f'/backtest/result/{task_id}')
+                response = await self._http_client.get(f'backtest/result/{task_id}')
 
                 if response.get('success'):
                     data = response.get('data', {})

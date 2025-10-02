@@ -36,39 +36,33 @@ class FlowhubRequestMapper:
     
     def map_batch_stock_data_request(self, brain_request: Dict[str, Any]) -> Dict[str, Any]:
         """映射批量股票数据抓取请求
-        
+
+        注意：不再传递日期范围参数。Flowhub 会根据数据库状态自动确定抓取范围。
+
         Args:
             brain_request: Brain层的批量股票数据请求
-            
+
         Returns:
             Dict[str, Any]: Flowhub API格式的请求
         """
         try:
             flowhub_request = {}
-            
+
             # 股票代码列表 (可选，不提供则抓取所有股票)
             if 'symbols' in brain_request and brain_request['symbols']:
                 flowhub_request['symbols'] = brain_request['symbols']
-            
-            # 日期范围
-            if 'start_date' in brain_request:
-                flowhub_request['start_date'] = brain_request['start_date']
-            
-            if 'end_date' in brain_request:
-                flowhub_request['end_date'] = brain_request['end_date']
-            else:
-                # 默认到今天
-                flowhub_request['end_date'] = datetime.now().strftime('%Y-%m-%d')
-            
+
+            # 不再传递日期范围参数，完全由 Flowhub 的 econdb_client 自动处理
+
             # 增量更新标志
             flowhub_request['incremental'] = brain_request.get('incremental', True)
-            
+
             # 强制更新标志
             flowhub_request['force_update'] = brain_request.get('force_update', False)
-            
+
             logger.debug(f"Mapped batch stock data request: {flowhub_request}")
             return flowhub_request
-            
+
         except Exception as e:
             logger.error(f"Failed to map batch stock data request: {e}")
             raise ValueError(f"Request mapping failed: {e}")
@@ -216,27 +210,21 @@ class FlowhubRequestMapper:
     
     def get_default_batch_request(self, data_type: str = 'batch_stock_data') -> Dict[str, Any]:
         """获取默认的批量请求参数
-        
+
+        注意：不再添加日期范围参数。Flowhub 会根据数据库状态自动确定抓取范围。
+
         Args:
             data_type: 数据类型
-            
+
         Returns:
             Dict[str, Any]: 默认请求参数
         """
-        today = datetime.now()
-        yesterday = today - timedelta(days=1)
-        
         default_request = {
             'incremental': True,
             'force_update': False
         }
-        
-        # 对于股票数据，添加默认日期范围
-        if data_type == 'batch_stock_data':
-            default_request.update({
-                'start_date': yesterday.strftime('%Y-%m-%d'),
-                'end_date': today.strftime('%Y-%m-%d')
-            })
-        
+
+        # 不再添加任何日期范围参数，完全由 Flowhub 的 econdb_client 自动处理
+
         logger.debug(f"Generated default {data_type} request: {default_request}")
         return default_request

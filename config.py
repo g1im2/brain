@@ -8,7 +8,7 @@
 import os
 import yaml
 import json
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, List
 from dataclasses import dataclass, field
 from pathlib import Path
 import logging
@@ -111,10 +111,18 @@ class ServiceConfig:
     # 定时任务配置
     scheduler_enabled: bool = True
     scheduler_timezone: str = "Asia/Shanghai"
+    daily_data_fetch_cron: Optional[str] = None
 
     # 监控配置
     monitoring_enabled: bool = True
     metrics_port: int = 9090
+
+    # 启动数据初始化配置
+    init_data_on_startup: bool = True
+    init_wait_dependencies: List[str] = field(default_factory=lambda: ["flowhub"])
+    init_max_history_first_run: bool = True
+    init_retry: Dict[str, Any] = field(default_factory=lambda: {"max_retries": 10, "backoff": [1, 2, 3, 5, 8, 13], "timeout": 300})
+    init_concurrency: int = 2
 
 
 @dataclass
@@ -180,30 +188,30 @@ class IntegrationConfig:
         self._load_config()
 
         logger.info(f"Integration config initialized for environment: {environment}")
-    
+
     def _load_config(self) -> None:
         """加载配置文件"""
         try:
             # 加载默认配置
             self._load_default_config()
-            
+
             # 加载环境特定配置
             self._load_environment_config()
-            
+
             # 加载用户指定配置文件
             if self.config_file:
                 self._load_file_config(self.config_file)
-            
+
             # 加载环境变量配置
             self._load_env_config()
-            
+
             # 应用配置到各组件
             self._apply_config()
-            
+
         except Exception as e:
             logger.error(f"Failed to load config: {e}")
             raise
-    
+
     def _load_default_config(self) -> None:
         """加载默认配置"""
         default_config = {
@@ -278,8 +286,14 @@ class IntegrationConfig:
                 'flowhub_service_url': 'http://flowhub-service:8080',
                 'scheduler_enabled': True,
                 'scheduler_timezone': 'Asia/Shanghai',
+                'daily_data_fetch_cron': None,
                 'monitoring_enabled': True,
-                'metrics_port': 9090
+                'metrics_port': 9090,
+                'init_data_on_startup': True,
+                'init_wait_dependencies': ['flowhub'],
+                'init_max_history_first_run': True,
+                'init_retry': { 'max_retries': 10, 'backoff': [1, 2, 3, 5, 8, 13], 'timeout': 300 },
+                'init_concurrency': 2
             },
             'logging': {
                 'level': 'INFO',
@@ -306,13 +320,13 @@ class IntegrationConfig:
         }
 
         self._config_data.update(default_config)
-    
+
     def _load_environment_config(self) -> None:
         """加载环境特定配置"""
         env_config_file = f"config/integration_{self.environment}.yaml"
         if os.path.exists(env_config_file):
             self._load_file_config(env_config_file)
-    
+
     def _load_file_config(self, config_file: str) -> None:
         """加载配置文件"""
         try:
@@ -320,7 +334,7 @@ class IntegrationConfig:
             if not config_path.exists():
                 logger.warning(f"Config file not found: {config_file}")
                 return
-            
+
             with open(config_path, 'r', encoding='utf-8') as f:
                 if config_path.suffix.lower() in ['.yaml', '.yml']:
                     file_config = yaml.safe_load(f)
@@ -329,15 +343,15 @@ class IntegrationConfig:
                 else:
                     logger.warning(f"Unsupported config file format: {config_file}")
                     return
-            
+
             if file_config:
                 self._merge_config(self._config_data, file_config)
                 logger.info(f"Loaded config from: {config_file}")
-                
+
         except Exception as e:
             logger.error(f"Failed to load config file {config_file}: {e}")
             raise
-    
+
     def _load_env_config(self) -> None:
         """加载环境变量配置"""
         env_mappings = {
@@ -358,6 +372,12 @@ class IntegrationConfig:
             'FLOWHUB_SERVICE_URL': ('service', 'flowhub_service_url', str),
             'SCHEDULER_ENABLED': ('service', 'scheduler_enabled', bool),
             'SCHEDULER_TIMEZONE': ('service', 'scheduler_timezone', str),
+            'SCHEDULER_DAILY_CRON': ('service', 'daily_data_fetch_cron', str),
+            # 启动数据初始化配置（环境变量覆盖）
+            'INIT_DATA_ON_STARTUP': ('service', 'init_data_on_startup', bool),
+            'INIT_WAIT_DEPENDENCIES': ('service', 'init_wait_dependencies', str),  # 逗号分隔
+            'INIT_MAX_HISTORY_FIRST_RUN': ('service', 'init_max_history_first_run', bool),
+            'INIT_CONCURRENCY': ('service', 'init_concurrency', int),
 
             # 日志配置
             'LOG_LEVEL': ('logging', 'level', str),
@@ -391,9 +411,23 @@ class IntegrationConfig:
                     self._config_data[section][key] = value
 
                     logger.info(f"Applied env config: {env_var}={value}")
+
                 except (ValueError, TypeError) as e:
                     logger.warning(f"Invalid env config value for {env_var}: {value}, error: {e}")
-    
+
+        #    INIT_WAIT_DEPENDENCIES 
+        #   
+        if os.getenv('INIT_WAIT_DEPENDENCIES') is not None:
+            try:
+                deps_raw = os.getenv('INIT_WAIT_DEPENDENCIES', '')
+                deps = [x.strip() for x in deps_raw.split(',') if x.strip()]
+                if 'service' not in self._config_data:
+                    self._config_data['service'] = {}
+                self._config_data['service']['init_wait_dependencies'] = deps
+                logger.info(f"Applied env config: INIT_WAIT_DEPENDENCIES={deps}")
+            except Exception as e:
+                logger.warning(f"Invalid INIT_WAIT_DEPENDENCIES: {e}")
+
     def _merge_config(self, base: Dict[str, Any], override: Dict[str, Any]) -> None:
         """合并配置字典"""
         for key, value in override.items():
@@ -401,7 +435,7 @@ class IntegrationConfig:
                 self._merge_config(base[key], value)
             else:
                 base[key] = value
-    
+
     def _apply_config(self) -> None:
         """应用配置到各组件"""
         try:
@@ -411,35 +445,35 @@ class IntegrationConfig:
                 for key, value in config.items():
                     if hasattr(self.system_coordinator, key):
                         setattr(self.system_coordinator, key, value)
-            
+
             # 应用信号路由器配置
             if 'signal_router' in self._config_data:
                 config = self._config_data['signal_router']
                 for key, value in config.items():
                     if hasattr(self.signal_router, key):
                         setattr(self.signal_router, key, value)
-            
+
             # 应用数据流管理器配置
             if 'data_flow_manager' in self._config_data:
                 config = self._config_data['data_flow_manager']
                 for key, value in config.items():
                     if hasattr(self.data_flow_manager, key):
                         setattr(self.data_flow_manager, key, value)
-            
+
             # 应用验证协调器配置
             if 'validation_coordinator' in self._config_data:
                 config = self._config_data['validation_coordinator']
                 for key, value in config.items():
                     if hasattr(self.validation_coordinator, key):
                         setattr(self.validation_coordinator, key, value)
-            
+
             # 应用监控配置
             if 'monitoring' in self._config_data:
                 config = self._config_data['monitoring']
                 for key, value in config.items():
                     if hasattr(self.monitoring, key):
                         setattr(self.monitoring, key, value)
-            
+
             # 应用适配器配置
             if 'adapter' in self._config_data:
                 config = self._config_data['adapter']
@@ -478,50 +512,50 @@ class IntegrationConfig:
         except Exception as e:
             logger.error(f"Failed to apply config: {e}")
             raise
-    
+
     def get(self, key: str, default: Any = None) -> Any:
         """获取配置值
-        
+
         Args:
             key: 配置键，支持点号分隔的嵌套键
             default: 默认值
-            
+
         Returns:
             Any: 配置值
         """
         keys = key.split('.')
         value = self._config_data
-        
+
         try:
             for k in keys:
                 value = value[k]
             return value
         except (KeyError, TypeError):
             return default
-    
+
     def set(self, key: str, value: Any) -> None:
         """设置配置值
-        
+
         Args:
             key: 配置键，支持点号分隔的嵌套键
             value: 配置值
         """
         keys = key.split('.')
         config = self._config_data
-        
+
         for k in keys[:-1]:
             if k not in config:
                 config[k] = {}
             config = config[k]
-        
+
         config[keys[-1]] = value
-        
+
         # 重新应用配置
         self._apply_config()
-    
+
     def validate(self) -> bool:
         """验证配置有效性
-        
+
         Returns:
             bool: 配置是否有效
         """
@@ -544,7 +578,7 @@ class IntegrationConfig:
                 if section not in self._config_data:
                     logger.error(f"Missing required config section: {section}")
                     return False
-            
+
             # 验证数值范围
             validations = [
                 (self.system_coordinator.max_concurrent_cycles > 0, "max_concurrent_cycles must be positive"),
@@ -561,37 +595,37 @@ class IntegrationConfig:
                 (1 <= self.redis.port <= 65535, "redis port must be between 1 and 65535"),
                 (0 <= self.redis.db <= 15, "redis db must be between 0 and 15"),
             ]
-            
+
             for condition, message in validations:
                 if not condition:
                     logger.error(f"Config validation failed: {message}")
                     return False
-            
+
             logger.info("Config validation passed")
             return True
-            
+
         except Exception as e:
             logger.error(f"Config validation error: {e}")
             return False
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式
-        
+
         Returns:
             Dict[str, Any]: 配置字典
         """
         return self._config_data.copy()
-    
+
     def save_to_file(self, file_path: str) -> None:
         """保存配置到文件
-        
+
         Args:
             file_path: 文件路径
         """
         try:
             config_path = Path(file_path)
             config_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             with open(config_path, 'w', encoding='utf-8') as f:
                 if config_path.suffix.lower() in ['.yaml', '.yml']:
                     yaml.dump(self._config_data, f, default_flow_style=False, allow_unicode=True)
@@ -599,9 +633,9 @@ class IntegrationConfig:
                     json.dump(self._config_data, f, indent=2, ensure_ascii=False)
                 else:
                     raise ValueError(f"Unsupported file format: {config_path.suffix}")
-            
+
             logger.info(f"Config saved to: {file_path}")
-            
+
         except Exception as e:
             logger.error(f"Failed to save config to {file_path}: {e}")
             raise

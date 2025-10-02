@@ -64,7 +64,12 @@ class ExecutionRequestMapper:
                     'timeout_seconds': config.get('timeout_seconds', 300)
                 }
             }
-            
+
+            # 透传可选的回调URL
+            callback_url = brain_request.get('callback_url')
+            if callback_url:
+                execution_request['config']['callback_url'] = callback_url
+
             logger.debug(f"Mapped strategy analysis request: {len(symbols)} symbols, {len(analyzers)} analyzers")
             return execution_request
             
@@ -84,7 +89,7 @@ class ExecutionRequestMapper:
         try:
             symbols = brain_request.get('symbols', [])
             strategy_config = brain_request.get('strategy_config', {})
-            
+
             # 构造回测请求
             backtest_request = {
                 'strategy': {
@@ -102,7 +107,12 @@ class ExecutionRequestMapper:
                     'commission': strategy_config.get('commission', 0.001)
                 }
             }
-            
+
+            # 透传可选的回调URL
+            callback_url = brain_request.get('callback_url')
+            if callback_url:
+                backtest_request['config']['callback_url'] = callback_url
+
             logger.debug(f"Mapped backtest request: {len(symbols)} symbols")
             return backtest_request
             

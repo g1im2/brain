@@ -70,8 +70,10 @@ class IntegrationScheduler:
         """创建任务蓝图: 包含默认任务 + 启用的自定义任务"""
         blueprint = BluePrint()
 
-        # 默认任务：每日数据抓取（每天执行一次）
-        blueprint.task('/daily_data_fetch', plans=PlansEvery([TimeUnits.DAYS], [1]))(
+        # 默认任务：每日数据抓取（可配置cron，缺省每天一次）
+        daily_cron = getattr(self.config.service, 'daily_data_fetch_cron', None)
+        daily_plans = self._parse_cron_to_plans(daily_cron) if daily_cron else PlansEvery([TimeUnits.DAYS], [1])
+        blueprint.task('/daily_data_fetch', plans=daily_plans)(
             self._trigger_daily_data_fetch
         )
 
@@ -277,6 +279,7 @@ class IntegrationScheduler:
     # 默认任务实现
     async def _trigger_daily_data_fetch(self, context):
         """触发每日数据抓取"""
+        flowhub_adapter = None
         try:
             logger.info("Triggering daily data fetch...")
 
@@ -310,6 +313,12 @@ class IntegrationScheduler:
         except Exception as e:
             logger.error(f"Daily data fetch failed: {e}")
             self._record_task_execution("daily_data_fetch", "failed", str(e))
+        finally:
+            if flowhub_adapter:
+                try:
+                    await flowhub_adapter.disconnect_from_system()
+                except Exception as ce:
+                    logger.warning(f"Failed to close FlowhubAdapter session: {ce}")
 
     async def _trigger_analysis_cycle(self):
         """触发完整分析周期"""
@@ -334,7 +343,8 @@ class IntegrationScheduler:
             FlowhubAdapter: FlowhubAdapter实例，如果不可用则返回None
         """
         try:
-            from ..adapters import FlowhubAdapter
+            # 使用绝对导入，避免在异步调度上下文中相对导入失败
+            from adapters import FlowhubAdapter
 
             # 创建FlowhubAdapter实例
             flowhub_adapter = FlowhubAdapter(self.config)

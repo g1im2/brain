@@ -11,8 +11,13 @@ from datetime import datetime
 
 import aiohttp
 
-from config import IntegrationConfig
-from exceptions import AdapterException, ConnectionException
+try:
+    from ..config import IntegrationConfig
+    from ..exceptions import AdapterException, ConnectionException
+except Exception:
+    #
+    from config import IntegrationConfig
+    from exceptions import AdapterException, ConnectionException
 
 
 class HttpClient:
@@ -228,9 +233,15 @@ class HttpClient:
                 self.logger.debug(f"{method} {url} (attempt {attempt + 1})")
 
                 async with self._session.request(method, url, **kwargs) as response:
-                    if response.status == 200:
+                    if 200 <= response.status < 300:
                         self._success_count += 1
-                        data = await response.json()
+                        if response.status == 204:
+                            return {}
+                        # 优先按JSON解析，失败则返回文本
+                        try:
+                            data = await response.json()
+                        except Exception:
+                            data = {'text': await response.text()}
                         return data
                     elif response.status == 404:
                         raise AdapterException("HttpClient", f"Endpoint not found: {endpoint}")
