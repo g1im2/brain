@@ -19,6 +19,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../..'))
 from services.brain.config import IntegrationConfig
 from services.brain.adapters.strategy_adapter import StrategyAdapter
 from services.brain.adapters.execution_request_mapper import ExecutionRequestMapper
+from services.brain.coordinators.system_coordinator import SystemCoordinator
+
+try:
+    from services.brain.adapters.tactical_adapter import TacticalAdapter
+except ImportError:
+    TacticalAdapter = None
 
 # 配置日志
 logging.basicConfig(
@@ -76,22 +82,18 @@ class IntegrationReadinessTester:
         
         try:
             # 测试StrategyAdapter导入
-            from services.brain.adapters.strategy_adapter import StrategyAdapter
-            self._record_test_result("StrategyAdapter导入", True, "成功导入StrategyAdapter")
+            self._record_test_result("StrategyAdapter导入", StrategyAdapter is not None, "成功导入StrategyAdapter")
             
             # 测试ExecutionRequestMapper导入
-            from services.brain.adapters.execution_request_mapper import ExecutionRequestMapper
-            self._record_test_result("ExecutionRequestMapper导入", True, "成功导入ExecutionRequestMapper")
+            self._record_test_result("ExecutionRequestMapper导入", ExecutionRequestMapper is not None, "成功导入ExecutionRequestMapper")
             
             # 测试旧TacticalAdapter已移除
-            try:
-                from services.brain.adapters.tactical_adapter import TacticalAdapter
-                self._record_test_result("TacticalAdapter移除", False, "TacticalAdapter仍然存在")
-            except ImportError:
+            if TacticalAdapter is None:
                 self._record_test_result("TacticalAdapter移除", True, "TacticalAdapter已成功移除")
+            else:
+                self._record_test_result("TacticalAdapter移除", False, "TacticalAdapter仍然存在")
             
             # 测试SystemCoordinator更新
-            from services.brain.coordinators.system_coordinator import SystemCoordinator
             coordinator = SystemCoordinator(self.config)
             has_strategy_adapter = hasattr(coordinator, '_strategy_adapter')
             self._record_test_result("SystemCoordinator更新", has_strategy_adapter, 
@@ -237,7 +239,6 @@ class IntegrationReadinessTester:
             }
             
             # 检查SystemCoordinator中的方法名更新
-            from services.brain.coordinators.system_coordinator import SystemCoordinator
             coordinator = SystemCoordinator(self.config)
             
             # 检查是否有新的方法名

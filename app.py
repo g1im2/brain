@@ -9,14 +9,19 @@ import asyncio
 from aiohttp import web
 from aiohttp_cors import setup as cors_setup, ResourceOptions
 
+from asyncron import start_scheduler
 from config import IntegrationConfig
+from container import setup_container
+from interfaces import ISystemCoordinator, ISignalRouter, IDataFlowManager
 from middleware import setup_middleware
 from routes import setup_routes
-from coordinators.system_coordinator import SystemCoordinator
 from scheduler.integration_scheduler import IntegrationScheduler
+from scheduler.macro_data_tasks import MacroDataTaskScheduler
+from scheduler.portfolio_data_tasks import PortfolioDataTaskScheduler
+from scheduler.analysis_trigger import AnalysisTriggerScheduler
 from adapters.service_registry import ServiceRegistry
-from managers.data_flow_manager import DataFlowManager
-from routers.signal_router import SignalRouter
+from adapters.macro_adapter import MacroAdapter
+from adapters.execution_adapter import ExecutionAdapter
 from monitors.system_monitor import SystemMonitor
 from initializers.data_initializer import DataInitializationCoordinator
 
@@ -77,24 +82,46 @@ async def init_components(app: web.Application, config: IntegrationConfig):
     logger.info("Initializing core components")
 
     try:
+        # 依赖注入容器
+        app['container'] = await setup_container(config)
+
         # 服务注册表
         app['service_registry'] = ServiceRegistry(config)
 
-        # 系统协调器
-        app['coordinator'] = SystemCoordinator(config)
-
-        # 信号路由器
-        app['signal_router'] = SignalRouter(config)
-
-        # 数据流管理器
-        app['data_flow_manager'] = DataFlowManager(config)
+        # 核心组件（通过DI解析）
+        app['coordinator'] = await app['container'].resolve(ISystemCoordinator)
+        app['signal_router'] = await app['container'].resolve(ISignalRouter)
+        app['data_flow_manager'] = await app['container'].resolve(IDataFlowManager)
 
         # 系统监控器
         app['system_monitor'] = SystemMonitor(config)
 
+        # 服务适配器
+        # Macro服务适配器
+        app['macro_adapter'] = MacroAdapter(config)
+        logger.info(f"MacroAdapter initialized with URL: {config.service.macro_service_url}")
+
+        # Execution服务适配器
+        app['execution_adapter'] = ExecutionAdapter(config)
+        logger.info(f"ExecutionAdapter initialized with URL: {config.service.execution_service_url}")
+
+        # 监控器组件引用
+        app['system_monitor'].set_component_references(
+            system_coordinator=app.get('coordinator'),
+            signal_router=app.get('signal_router'),
+            data_flow_manager=app.get('data_flow_manager'),
+            macro_adapter=app.get('macro_adapter')
+        )
+
         # 定时任务调度器
         if config.service.scheduler_enabled:
-            app['scheduler'] = IntegrationScheduler(config, app['coordinator'])
+            app['scheduler'] = IntegrationScheduler(config, app['coordinator'], app)
+            # 宏观数据调度器
+            app['macro_scheduler'] = MacroDataTaskScheduler(config, app['coordinator'], app)
+            # 投资组合数据调度器
+            app['portfolio_scheduler'] = PortfolioDataTaskScheduler(config, app['coordinator'], app)
+            # 分析触发调度器
+            app['analysis_trigger'] = AnalysisTriggerScheduler(app)
 
         logger.info("Core components initialized successfully")
 
@@ -134,9 +161,41 @@ async def startup_handler(app: web.Application):
         # 启动系统监控器
         await app['system_monitor'].start()
 
-        # 启动定时任务调度器
+        # 收集所有调度器的planer，统一启动（避免多次调用start_scheduler导致线程冲突）
+        planers = []
+
+        # 添加集成调度器的planer（不调用其start方法）
         if 'scheduler' in app:
-            await app['scheduler'].start()
+            integration_planer = app['scheduler'].get_planer()
+            planers.append(integration_planer)
+            logger.info("Integration scheduler planer added")
+
+        # 添加宏观数据调度器的planer
+        if 'macro_scheduler' in app:
+            macro_planer = app['macro_scheduler'].get_planer()
+            planers.append(macro_planer)
+            logger.info("Macro data scheduler planer added")
+
+        # 添加投资组合数据调度器的planer
+        if 'portfolio_scheduler' in app:
+            portfolio_planer = app['portfolio_scheduler'].get_planer()
+            planers.append(portfolio_planer)
+            logger.info("Portfolio data scheduler planer added")
+
+        # 添加分析触发调度器的planer
+        if 'analysis_trigger' in app:
+            analysis_trigger_planer = app['analysis_trigger'].get_planer()
+            planers.append(analysis_trigger_planer)
+            logger.info("Analysis trigger scheduler planer added")
+
+        # 统一启动所有调度器（只调用一次start_scheduler）
+        if planers:
+            start_scheduler(planers)
+            logger.info(f"All {len(planers)} schedulers started successfully")
+
+            # 标记IntegrationScheduler为已运行状态
+            if 'scheduler' in app:
+                app['scheduler']._is_running = True
 
         logger.info("All components started successfully")
 
@@ -199,8 +258,6 @@ def create_test_app(config: IntegrationConfig = None) -> web.Application:
     """
     if config is None:
         config = IntegrationConfig(environment="testing")
-
-    import asyncio
 
     # 在新的事件循环中创建应用
     loop = asyncio.new_event_loop()

@@ -417,15 +417,29 @@ class DataFlowManager(IDataFlowManager):
     async def _check_data_sources_health(self) -> Dict[str, float]:
         """检查数据源健康状态"""
         health_scores = {}
+        now = datetime.now()
+        ttl = max(self.config.data_flow_manager.cache_ttl, 1)
 
         for source_name, source_info in self._data_sources.items():
             try:
-                # 模拟健康检查
-                await asyncio.sleep(0.01)
-                health_score = 1.0  # 假设健康
+                status = source_info.get('status', 'inactive')
+                last_update = source_info.get('last_update')
+                if not last_update:
+                    last_update = now
+                age_seconds = (now - last_update).total_seconds()
+
+                if status != 'active':
+                    health_score = 0.0
+                elif age_seconds <= ttl:
+                    health_score = 1.0
+                elif age_seconds <= ttl * 2:
+                    health_score = 0.6
+                else:
+                    health_score = 0.2
+
                 health_scores[source_name] = health_score
                 source_info['health_score'] = health_score
-                source_info['last_update'] = datetime.now()
+                source_info['last_update'] = now
             except Exception as e:
                 logger.warning(f"Health check failed for {source_name}: {e}")
                 health_scores[source_name] = 0.0
@@ -695,48 +709,80 @@ class DataFlowManager(IDataFlowManager):
 
     async def _optimize_data_preloading(self) -> Dict[str, Any]:
         """优化数据预加载"""
+        cache_stats = self._cache_manager.get_statistics()
+        max_size_mb = self.config.data_flow_manager.cache_size_mb
+        hit_rate = cache_stats.get('hit_rate', 0.0)
+        preload_enabled = hit_rate < 0.85
+        preload_size_mb = max(10.0, min(max_size_mb * 0.1, max_size_mb))
         return {
-            'preload_enabled': True,
-            'preload_size': '50MB',
-            'preload_hit_rate': 0.85
+            'preload_enabled': preload_enabled,
+            'preload_size': f"{preload_size_mb:.1f}MB",
+            'preload_hit_rate': hit_rate
         }
 
     async def _optimize_concurrency(self) -> Dict[str, Any]:
         """优化并发处理"""
         max_concurrent = self.config.data_flow_manager.max_concurrent_requests
+        current_concurrent = self._flow_statistics.get('active_requests', 0)
         return {
             'max_concurrent_requests': max_concurrent,
-            'current_concurrent': 0,
-            'optimization_applied': True
+            'current_concurrent': current_concurrent,
+            'optimization_applied': current_concurrent <= max_concurrent
         }
 
     async def _optimize_data_compression(self) -> Dict[str, Any]:
         """优化数据压缩"""
+        hit_rate = self._cache_manager.get_hit_rate()
+        compression_ratio = 0.6 if hit_rate < 0.5 else 0.7
         return {
-            'compression_enabled': True,
-            'compression_ratio': 0.7,
+            'compression_enabled': self.config.data_flow_manager.enable_data_compression,
+            'compression_ratio': compression_ratio,
             'compression_algorithm': 'gzip'
         }
 
     async def _check_data_completeness(self) -> float:
         """检查数据完整性"""
-        # 模拟完整性检查
-        return 0.95
+        if not self._data_sources:
+            return 0.0
+        scores = [info.get('health_score', 0.0) for info in self._data_sources.values()]
+        return sum(scores) / len(scores)
 
     async def _check_data_accuracy(self) -> float:
         """检查数据准确性"""
-        # 模拟准确性检查
-        return 0.92
+        total = self._flow_statistics.get('total_requests', 0)
+        failed = self._flow_statistics.get('failed_requests', 0)
+        if total <= 0:
+            return 1.0
+        error_rate = failed / total
+        return max(0.0, min(1.0, 1.0 - error_rate))
 
     async def _check_data_timeliness(self) -> float:
         """检查数据及时性"""
-        # 模拟及时性检查
-        return 0.88
+        if not self._data_sources:
+            return 0.0
+        now = datetime.now()
+        ttl = max(self.config.data_flow_manager.cache_ttl, 1)
+        freshness_scores = []
+        for info in self._data_sources.values():
+            last_update = info.get('last_update')
+            if not last_update:
+                freshness_scores.append(0.0)
+                continue
+            age = (now - last_update).total_seconds()
+            freshness = max(0.0, 1.0 - min(age / ttl, 1.0))
+            freshness_scores.append(freshness)
+        return sum(freshness_scores) / len(freshness_scores)
 
     async def _check_data_consistency(self) -> float:
         """检查数据一致性"""
-        # 模拟一致性检查
-        return 0.90
+        if not self._data_sources:
+            return 0.0
+        scores = [info.get('health_score', 0.0) for info in self._data_sources.values()]
+        max_score = max(scores)
+        min_score = min(scores)
+        if max_score <= 0:
+            return 0.0
+        return min_score / max_score
 
     async def _generate_quality_recommendations(self, issues: List[Dict[str, Any]]) -> List[str]:
         """生成质量改进建议"""

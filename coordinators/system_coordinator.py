@@ -390,6 +390,14 @@ class SystemCoordinator(ISystemCoordinator):
             SystemStatus: 当前系统状态
         """
         return self._system_status
+
+    def is_running(self) -> bool:
+        """是否在运行"""
+        return self._is_running
+
+    def get_resource_allocation(self) -> Optional[ResourceAllocation]:
+        """获取资源分配信息"""
+        return self._resource_allocation
     
     def get_active_cycles(self) -> Dict[str, AnalysisCycleResult]:
         """获取活跃分析周期

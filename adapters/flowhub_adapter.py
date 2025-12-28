@@ -280,7 +280,7 @@ class FlowhubAdapter(ISystemAdapter):
             logger.error(f"Failed to get job result for {job_id}: {e}")
             raise AdapterException("FlowhubAdapter", f"Get job result failed: {e}")
 
-    async def wait_for_job_completion(self, job_id: str, timeout: int = 3600,
+    async def wait_for_job_completion(self, job_id: str, timeout: int = 172800,
                                     check_interval: int = 30) -> Dict[str, Any]:
         """等待任务完成
 
@@ -523,6 +523,126 @@ class FlowhubAdapter(ISystemAdapter):
             self._request_statistics['failed_requests'] += 1
             logger.error(f"Failed to create portfolio data job for {data_type}: {e}")
             raise AdapterException("FlowhubAdapter", f"Portfolio data job creation failed for {data_type}: {e}")
+
+    # ==================== 市场数据任务创建方法 ====================
+
+    async def create_index_daily_data_job(self, index_codes: List[str] = None,
+                                         start_date: str = None, end_date: str = None,
+                                         update_mode: str = 'incremental') -> Dict[str, Any]:
+        """创建指数日线数据抓取任务
+
+        Args:
+            index_codes: 指数代码列表，None表示主要指数
+            start_date: 开始日期 (YYYY-MM-DD)
+            end_date: 结束日期 (YYYY-MM-DD)
+            update_mode: 更新模式 ('incremental', 'full_update')
+
+        Returns:
+            Dict[str, Any]: 任务创建结果
+        """
+        try:
+            # 构建请求参数
+            params = {
+                'update_mode': update_mode
+            }
+
+            # 默认主要指数
+            if index_codes is None:
+                index_codes = ['000001.SH', '399001.SZ', '000300.SH', '399006.SZ', '000016.SH', '399005.SZ']
+
+            params['index_codes'] = index_codes
+
+            if start_date:
+                params['start_date'] = start_date
+            if end_date:
+                params['end_date'] = end_date
+
+            # 发送请求
+            endpoint = '/api/v1/jobs/index-daily-data'
+            response = await self._http_client.post(endpoint, data=params)
+
+            # 更新统计信息
+            self._request_statistics['total_requests'] += 1
+            self._request_statistics['successful_requests'] += 1
+
+            logger.info(f"Index daily data job created: {response.get('job_id')}")
+            return response
+
+        except Exception as e:
+            self._request_statistics['total_requests'] += 1
+            self._request_statistics['failed_requests'] += 1
+            logger.error(f"Failed to create index daily data job: {e}")
+            raise AdapterException("FlowhubAdapter", f"Index daily data job creation failed: {e}")
+
+    async def create_industry_board_job(self, source: str = 'ths',
+                                       update_mode: str = 'incremental') -> Dict[str, Any]:
+        """创建行业板块数据抓取任务
+
+        Args:
+            source: 数据源 ('ths' 同花顺)
+            update_mode: 更新模式 ('incremental', 'full_update')
+
+        Returns:
+            Dict[str, Any]: 任务创建结果
+        """
+        try:
+            # 构建请求参数
+            params = {
+                'source': source,
+                'update_mode': update_mode
+            }
+
+            # 发送请求
+            endpoint = '/api/v1/jobs/industry-board'
+            response = await self._http_client.post(endpoint, data=params)
+
+            # 更新统计信息
+            self._request_statistics['total_requests'] += 1
+            self._request_statistics['successful_requests'] += 1
+
+            logger.info(f"Industry board job created: {response.get('job_id')}")
+            return response
+
+        except Exception as e:
+            self._request_statistics['total_requests'] += 1
+            self._request_statistics['failed_requests'] += 1
+            logger.error(f"Failed to create industry board job: {e}")
+            raise AdapterException("FlowhubAdapter", f"Industry board job creation failed: {e}")
+
+    async def create_concept_board_job(self, source: str = 'ths',
+                                      update_mode: str = 'incremental') -> Dict[str, Any]:
+        """创建概念板块数据抓取任务
+
+        Args:
+            source: 数据源 ('ths' 同花顺)
+            update_mode: 更新模式 ('incremental', 'full_update')
+
+        Returns:
+            Dict[str, Any]: 任务创建结果
+        """
+        try:
+            # 构建请求参数
+            params = {
+                'source': source,
+                'update_mode': update_mode
+            }
+
+            # 发送请求
+            endpoint = '/api/v1/jobs/concept-board'
+            response = await self._http_client.post(endpoint, data=params)
+
+            # 更新统计信息
+            self._request_statistics['total_requests'] += 1
+            self._request_statistics['successful_requests'] += 1
+
+            logger.info(f"Concept board job created: {response.get('job_id')}")
+            return response
+
+        except Exception as e:
+            self._request_statistics['total_requests'] += 1
+            self._request_statistics['failed_requests'] += 1
+            logger.error(f"Failed to create concept board job: {e}")
+            raise AdapterException("FlowhubAdapter", f"Concept board job creation failed: {e}")
 
     # ==================== 宏观数据任务创建方法 ====================
 

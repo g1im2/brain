@@ -5,8 +5,9 @@
 提供统一的异常处理和错误恢复策略。
 """
 
-from typing import Dict, Any, Optional, List
+import re
 from datetime import datetime
+from typing import Dict, Any, Optional, List
 
 
 class IntegrationException(Exception):
@@ -361,8 +362,6 @@ def handle_exception(exception: Exception, component: str = "unknown",
 
 def _mask_sensitive_info(message: str) -> str:
     """屏蔽敏感信息"""
-    import re
-
     # 屏蔽密码、token等敏感信息
     patterns = [
         (r'password["\s]*[:=]["\s]*[^"\s]+', 'password=***'),

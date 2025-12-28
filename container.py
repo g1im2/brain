@@ -5,10 +5,28 @@
 """
 
 import asyncio
+import inspect
 import logging
 from typing import Dict, Type, TypeVar, Callable, Any, Optional
-from abc import ABC, abstractmethod
-import inspect
+
+try:
+    from .interfaces import (
+        ISystemCoordinator, ISignalRouter, IDataFlowManager,
+        ITemporalValidationCoordinator
+    )
+    from .coordinators.system_coordinator import SystemCoordinator
+    from .routers.signal_router import SignalRouter
+    from .managers.data_flow_manager import DataFlowManager
+    from .validators.temporal_validation_coordinator import TemporalValidationCoordinator
+except Exception:
+    from interfaces import (
+        ISystemCoordinator, ISignalRouter, IDataFlowManager,
+        ITemporalValidationCoordinator
+    )
+    from coordinators.system_coordinator import SystemCoordinator
+    from routers.signal_router import SignalRouter
+    from managers.data_flow_manager import DataFlowManager
+    from validators.temporal_validation_coordinator import TemporalValidationCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -99,21 +117,13 @@ def inject(interface: Type[T]) -> T:
     return decorator
 
 
-class ServiceRegistry:
-    """服务注册表"""
-    
+class DIServiceRegistry:
+    """依赖注入服务注册表"""
+
     @staticmethod
     async def register_core_services(container: DIContainer, config):
         """注册核心服务"""
-        from .interfaces import (
-            ISystemCoordinator, ISignalRouter, IDataFlowManager,
-            ITemporalValidationCoordinator, ISystemAdapter
-        )
-        from .coordinators import SystemCoordinator
-        from .routers import SignalRouter
-        from .managers import DataFlowManager
-        from .validators import TemporalValidationCoordinator
-        
+
         # 注册配置
         container.register_instance(type(config), config)
         
@@ -129,5 +139,5 @@ class ServiceRegistry:
 # 使用示例
 async def setup_container(config):
     """设置依赖注入容器"""
-    await ServiceRegistry.register_core_services(container, config)
+    await DIServiceRegistry.register_core_services(container, config)
     return container

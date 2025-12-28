@@ -14,7 +14,9 @@ import uuid
 from asyncron import (
     Scheduler,
     BluePrint,
+    PlansAt,
     PlansEvery,
+    TimeUnit,
     TimeUnits,
     start_scheduler
 )
@@ -24,19 +26,26 @@ from exceptions import AdapterException
 
 logger = logging.getLogger(__name__)
 
+try:
+    from adapters import FlowhubAdapter
+except Exception:
+    FlowhubAdapter = None
+
 
 class IntegrationScheduler:
     """Integration Service 定时任务调度器"""
 
-    def __init__(self, config: IntegrationConfig, coordinator=None):
+    def __init__(self, config: IntegrationConfig, coordinator=None, app=None):
         """初始化调度器
 
         Args:
             config: 集成配置对象
             coordinator: 系统协调器实例
+            app: aiohttp应用实例
         """
         self.config = config
         self.coordinator = coordinator
+        self.app = app
         self._is_running = False
         self._task_history: List[Dict[str, Any]] = []
         self._blueprint = None
@@ -66,6 +75,12 @@ class IntegrationScheduler:
             logger.error(f"Failed to start scheduler: {e}")
             raise
 
+    def get_planer(self) -> BluePrint:
+        """获取asyncron planer（蓝图）"""
+        if not hasattr(self, '_blueprint') or self._blueprint is None:
+            self._blueprint = self._create_task_blueprint()
+        return self._blueprint
+
     def _create_task_blueprint(self) -> BluePrint:
         """创建任务蓝图: 包含默认任务 + 启用的自定义任务"""
         blueprint = BluePrint()
@@ -75,6 +90,16 @@ class IntegrationScheduler:
         daily_plans = self._parse_cron_to_plans(daily_cron) if daily_cron else PlansEvery([TimeUnits.DAYS], [1])
         blueprint.task('/daily_data_fetch', plans=daily_plans)(
             self._trigger_daily_data_fetch
+        )
+
+        # 新增任务：每日指数数据抓取
+        blueprint.task('/daily_index_fetch', plans=daily_plans)(
+            self._trigger_daily_index_fetch
+        )
+
+        # 新增任务：每日板块数据抓取
+        blueprint.task('/daily_board_fetch', plans=daily_plans)(
+            self._trigger_daily_board_fetch
         )
 
         # 默认任务：系统健康检查（每30分钟执行一次）
@@ -151,7 +176,6 @@ class IntegrationScheduler:
                 return PlansEvery([TimeUnits.MINUTES], [n])
             if cron.startswith('at:'):
                 # asyncron的"at"按天触发，使用PlansEvery + Timer.at 需要通过PlansAt来表达具体时间
-                from asyncron import PlansAt, TimeUnit
                 time_str = cron.split(':', 1)[1]
                 time_str = time_str if time_str.count(':') == 2 else (time_str + ":00")
                 return PlansAt([TimeUnit.DAY], [time_str])
@@ -278,7 +302,13 @@ class IntegrationScheduler:
 
     # 默认任务实现
     async def _trigger_daily_data_fetch(self, context):
-        """触发每日数据抓取"""
+        """触发每日数据抓取
+
+        注意：
+        1. 创建 Flowhub 数据抓取任务
+        2. 等待任务完成（最多30分钟）
+        3. 通知 AnalysisTriggerScheduler 各个数据抓取任务已完成
+        """
         flowhub_adapter = None
         try:
             logger.info("Triggering daily data fetch...")
@@ -296,22 +326,38 @@ class IntegrationScheduler:
                 job_id = job_result.get('job_id')
                 logger.info(f"Daily data fetch job created: {job_id}")
 
-                # 记录任务执行成功
-                self._record_task_execution(
-                    "daily_data_fetch",
-                    "completed",
-                    f"Daily data fetch job created: {job_id}"
-                )
+                # 等待任务完成（最多30分钟）
+                logger.info(f"Waiting for job {job_id} to complete (timeout: 30 minutes)...")
+                result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
 
-                # 可选：等待任务完成（对于定时任务，通常不等待）
-                # result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
+                job_status = result.get('status')
+                if job_status == 'completed':
+                    logger.info(f"Daily data fetch job {job_id} completed successfully")
+
+                    # 记录任务执行成功
+                    self._record_task_execution(
+                        "daily_data_fetch",
+                        "completed",
+                        f"Daily data fetch job completed: {job_id}"
+                    )
+
+                    # 通知 AnalysisTriggerScheduler 数据抓取任务已完成
+                    await self._notify_data_fetch_completed()
+
+                else:
+                    logger.warning(f"Daily data fetch job {job_id} finished with status: {job_status}")
+                    self._record_task_execution(
+                        "daily_data_fetch",
+                        "failed",
+                        f"Job finished with status: {job_status}"
+                    )
 
             else:
                 logger.warning("FlowhubAdapter not available, skipping data fetch")
                 self._record_task_execution("daily_data_fetch", "skipped", "FlowhubAdapter not available")
 
         except Exception as e:
-            logger.error(f"Daily data fetch failed: {e}")
+            logger.error(f"Daily data fetch failed: {e}", exc_info=True)
             self._record_task_execution("daily_data_fetch", "failed", str(e))
         finally:
             if flowhub_adapter:
@@ -319,6 +365,157 @@ class IntegrationScheduler:
                     await flowhub_adapter.disconnect_from_system()
                 except Exception as ce:
                     logger.warning(f"Failed to close FlowhubAdapter session: {ce}")
+
+    async def _trigger_daily_index_fetch(self, context):
+        """触发每日指数数据抓取"""
+        flowhub_adapter = None
+        try:
+            logger.info("Triggering daily index data fetch...")
+
+            # 获取FlowhubAdapter实例
+            flowhub_adapter = await self._get_flowhub_adapter()
+
+            if flowhub_adapter:
+                # 创建指数日线数据抓取任务
+                job_result = await flowhub_adapter.create_index_daily_data_job(
+                    index_codes=None,  # None表示主要指数
+                    update_mode='incremental'
+                )
+
+                job_id = job_result.get('job_id')
+                logger.info(f"Index daily data fetch job created: {job_id}")
+
+                # 等待任务完成（最多30分钟）
+                logger.info(f"Waiting for job {job_id} to complete (timeout: 30 minutes)...")
+                result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
+
+                job_status = result.get('status')
+                if job_status == 'completed':
+                    logger.info(f"Index daily data fetch job {job_id} completed successfully")
+                    self._record_task_execution(
+                        "daily_index_fetch",
+                        "completed",
+                        f"Index data fetch job completed: {job_id}"
+                    )
+                else:
+                    logger.warning(f"Index daily data fetch job {job_id} finished with status: {job_status}")
+                    self._record_task_execution(
+                        "daily_index_fetch",
+                        "failed",
+                        f"Job finished with status: {job_status}"
+                    )
+            else:
+                logger.warning("FlowhubAdapter not available, skipping index data fetch")
+                self._record_task_execution("daily_index_fetch", "skipped", "FlowhubAdapter not available")
+
+        except Exception as e:
+            logger.error(f"Daily index data fetch failed: {e}", exc_info=True)
+            self._record_task_execution("daily_index_fetch", "failed", str(e))
+        finally:
+            if flowhub_adapter:
+                try:
+                    await flowhub_adapter.disconnect_from_system()
+                except Exception as ce:
+                    logger.warning(f"Failed to close FlowhubAdapter session: {ce}")
+
+    async def _trigger_daily_board_fetch(self, context):
+        """触发每日板块数据抓取（行业板块 + 概念板块）"""
+        flowhub_adapter = None
+        try:
+            logger.info("Triggering daily board data fetch...")
+
+            # 获取FlowhubAdapter实例
+            flowhub_adapter = await self._get_flowhub_adapter()
+
+            if flowhub_adapter:
+                # 创建行业板块数据抓取任务
+                industry_job_result = await flowhub_adapter.create_industry_board_job(
+                    source='ths',
+                    update_mode='incremental'
+                )
+                industry_job_id = industry_job_result.get('job_id')
+                logger.info(f"Industry board data fetch job created: {industry_job_id}")
+
+                # 创建概念板块数据抓取任务
+                concept_job_result = await flowhub_adapter.create_concept_board_job(
+                    source='ths',
+                    update_mode='incremental'
+                )
+                concept_job_id = concept_job_result.get('job_id')
+                logger.info(f"Concept board data fetch job created: {concept_job_id}")
+
+                # 等待行业板块任务完成
+                logger.info(f"Waiting for industry board job {industry_job_id} to complete...")
+                industry_result = await flowhub_adapter.wait_for_job_completion(industry_job_id, timeout=1800)
+
+                # 等待概念板块任务完成
+                logger.info(f"Waiting for concept board job {concept_job_id} to complete...")
+                concept_result = await flowhub_adapter.wait_for_job_completion(concept_job_id, timeout=1800)
+
+                # 检查任务状态
+                industry_status = industry_result.get('status')
+                concept_status = concept_result.get('status')
+
+                if industry_status == 'completed' and concept_status == 'completed':
+                    logger.info(f"Board data fetch jobs completed successfully")
+                    self._record_task_execution(
+                        "daily_board_fetch",
+                        "completed",
+                        f"Industry: {industry_job_id}, Concept: {concept_job_id}"
+                    )
+                else:
+                    logger.warning(f"Board data fetch jobs finished with status: Industry={industry_status}, Concept={concept_status}")
+                    self._record_task_execution(
+                        "daily_board_fetch",
+                        "partial",
+                        f"Industry: {industry_status}, Concept: {concept_status}"
+                    )
+            else:
+                logger.warning("FlowhubAdapter not available, skipping board data fetch")
+                self._record_task_execution("daily_board_fetch", "skipped", "FlowhubAdapter not available")
+
+        except Exception as e:
+            logger.error(f"Daily board data fetch failed: {e}", exc_info=True)
+            self._record_task_execution("daily_board_fetch", "failed", str(e))
+        finally:
+            if flowhub_adapter:
+                try:
+                    await flowhub_adapter.disconnect_from_system()
+                except Exception as ce:
+                    logger.warning(f"Failed to close FlowhubAdapter session: {ce}")
+
+    async def _notify_data_fetch_completed(self):
+        """通知 AnalysisTriggerScheduler 数据抓取任务已完成
+
+        根据 AnalysisTriggerScheduler 的依赖配置，通知以下任务已完成：
+        - stock_basic_data_fetch（股票基本信息）
+        - stock_daily_data_fetch（股票日K线数据）
+        - stock_index_data_fetch（股票指数）
+        - industry_board_data_fetch（行业板块）
+        - concept_board_data_fetch（概念板块）
+        """
+        try:
+            if self.app and 'analysis_trigger' in self.app:
+                analysis_trigger = self.app['analysis_trigger']
+
+                # 通知所有股票相关数据抓取任务已完成
+                tasks_to_notify = [
+                    'stock_basic_data_fetch',
+                    'stock_daily_data_fetch',
+                    'stock_index_data_fetch',
+                    'industry_board_data_fetch',
+                    'concept_board_data_fetch'
+                ]
+
+                for task_name in tasks_to_notify:
+                    await analysis_trigger.mark_task_completed(task_name)
+                    logger.info(f"Notified analysis trigger: {task_name} completed")
+
+            else:
+                logger.warning("AnalysisTriggerScheduler not available, skipping notification")
+
+        except Exception as e:
+            logger.error(f"Failed to notify data fetch completion: {e}", exc_info=True)
 
     async def _trigger_analysis_cycle(self):
         """触发完整分析周期"""
@@ -343,10 +540,10 @@ class IntegrationScheduler:
             FlowhubAdapter: FlowhubAdapter实例，如果不可用则返回None
         """
         try:
-            # 使用绝对导入，避免在异步调度上下文中相对导入失败
-            from adapters import FlowhubAdapter
-
             # 创建FlowhubAdapter实例
+            if FlowhubAdapter is None:
+                logger.warning("FlowhubAdapter import failed")
+                return None
             flowhub_adapter = FlowhubAdapter(self.config)
 
             # 连接到Flowhub服务
@@ -406,6 +603,24 @@ class IntegrationScheduler:
             self._task_history = self._task_history[-500:]  # 保留最近500条
 
         logger.info(f"Task execution recorded: {task_name} - {status}")
+
+        # 如果任务成功完成，通知分析触发调度器
+        if status == 'completed':
+            asyncio.create_task(self._notify_task_completion(task_name))
+
+    async def _notify_task_completion(self, task_name: str):
+        """通知分析触发调度器任务已完成
+
+        Args:
+            task_name: 任务名称
+        """
+        try:
+            if self.app and 'analysis_trigger' in self.app:
+                analysis_trigger = self.app['analysis_trigger']
+                await analysis_trigger.mark_task_completed(task_name)
+                logger.info(f"Notified analysis trigger: {task_name} completed")
+        except Exception as e:
+            logger.warning(f"Failed to notify task completion for {task_name}: {e}")
 
     async def get_task_history(self, task_id: str, query_params: Dict[str, Any]) -> Dict[str, Any]:
         """获取任务执行历史"""

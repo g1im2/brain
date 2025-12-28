@@ -7,6 +7,7 @@ Portfolio项目数据抓取任务调度器
 - 时点快照型数据：季度调整时触发
 """
 
+import asyncio
 import logging
 from datetime import datetime, date
 from typing import Dict, List, Any
@@ -26,7 +27,11 @@ from asyncron import (
     TaskContext
 )
 
-from ..config import IntegrationConfig
+from config import IntegrationConfig
+try:
+    from ..adapters import FlowhubAdapter
+except Exception:
+    from adapters import FlowhubAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -34,19 +39,21 @@ logger = logging.getLogger(__name__)
 class PortfolioDataTaskScheduler:
     """Portfolio项目数据抓取任务调度器"""
 
-    def __init__(self, config: IntegrationConfig, coordinator=None):
+    def __init__(self, config: IntegrationConfig, coordinator=None, app=None):
         """初始化Portfolio数据任务调度器
-        
+
         Args:
             config: 集成配置对象
             coordinator: 系统协调器实例
+            app: aiohttp应用实例
         """
         self.config = config
         self.coordinator = coordinator
+        self.app = app
         self._planer = create_planer()
-        
+
         self._setup_portfolio_data_tasks()
-        
+
         logger.info("PortfolioDataTaskScheduler initialized")
 
     def get_planer(self):
@@ -131,12 +138,13 @@ class PortfolioDataTaskScheduler:
             await self._trigger_data_quality_check()
 
         # ==================== 手动触发支持 ====================
-        
-        # 全量数据重建任务 (手动触发)
-        @self._planer.task(url='/portfolio_full_data_rebuild')
-        async def portfolio_full_data_rebuild(context: TaskContext):
-            """Portfolio全量数据重建任务（手动触发）"""
-            await self._trigger_full_data_rebuild()
+
+        # 全量数据重建任务 (手动触发) - 不注册到调度器，仅通过API手动触发
+        # 注释掉以避免asyncron要求plans参数
+        # @self._planer.task(url='/portfolio_full_data_rebuild')
+        # async def portfolio_full_data_rebuild(context: TaskContext):
+        #     """Portfolio全量数据重建任务（手动触发）"""
+        #     await self._trigger_full_data_rebuild()
 
         logger.info("Portfolio data tasks setup completed")
 
@@ -327,8 +335,6 @@ class PortfolioDataTaskScheduler:
     async def _get_flowhub_adapter(self):
         """获取FlowhubAdapter实例"""
         try:
-            from ..adapters import FlowhubAdapter
-            
             flowhub_adapter = FlowhubAdapter(self.config)
             connected = await flowhub_adapter.connect_to_system()
             
@@ -351,8 +357,26 @@ class PortfolioDataTaskScheduler:
             'message': message,
             'timestamp': datetime.now().isoformat()
         }
-        
+
         logger.info(f"Portfolio task execution recorded: {task_name} - {status}")
+
+        # 如果任务成功完成，通知分析触发调度器
+        if status == 'completed':
+            asyncio.create_task(self._notify_task_completion(task_name))
+
+    async def _notify_task_completion(self, task_name: str):
+        """通知分析触发调度器任务已完成
+
+        Args:
+            task_name: 任务名称
+        """
+        try:
+            if self.app and 'analysis_trigger' in self.app:
+                analysis_trigger = self.app['analysis_trigger']
+                await analysis_trigger.mark_task_completed(task_name)
+                logger.info(f"Notified analysis trigger: {task_name} completed")
+        except Exception as e:
+            logger.warning(f"Failed to notify task completion for {task_name}: {e}")
 
     # ==================== 手动触发接口 ====================
 

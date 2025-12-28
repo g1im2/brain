@@ -6,10 +6,11 @@
 """
 
 import asyncio
-import logging
-import uuid
 import json
+import logging
 import smtplib
+import uuid
+import aiohttp
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Callable, Set
 from collections import defaultdict, deque
@@ -160,8 +161,6 @@ class WebhookChannel(NotificationChannel):
         try:
             if not self.is_enabled:
                 return False
-            
-            import aiohttp
             
             webhook_url = self.config.get('webhook_url')
             if not webhook_url:

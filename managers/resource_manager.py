@@ -7,14 +7,18 @@
 
 import asyncio
 import logging
-import uuid
-import numpy as np
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Tuple
-from collections import defaultdict, deque
-from enum import Enum
-from dataclasses import dataclass, field
+import os
+import resource
+import shutil
 import threading
+import uuid
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from enum import Enum
+from typing import Dict, List, Any, Optional, Tuple
+
+import numpy as np
 
 from config import IntegrationConfig
 from exceptions import IntegrationException
@@ -488,10 +492,7 @@ class ResourceManager:
     # 私有方法实现
     def _initialize_resource_quotas(self) -> None:
         """初始化资源配额"""
-        # 获取系统资源信息 (模拟数据，因为psutil不可用)
-        cpu_count = 4  # 模拟4核CPU
-        memory_total = 8.0  # 模拟8GB内存
-        disk_total = 100.0  # 模拟100GB磁盘
+        cpu_count, memory_total, disk_total = self._get_system_capacity()
 
         # 设置资源配额
         self._resource_quotas = {
@@ -712,10 +713,7 @@ class ResourceManager:
         try:
             current_time = datetime.now()
 
-            # 收集系统资源使用情况 (模拟数据，因为psutil不可用)
-            cpu_usage = 0.20  # 模拟20%的CPU使用率
-            memory_usage = 0.30  # 模拟30%的内存使用率
-            disk_usage = 0.25  # 模拟25%的磁盘使用率
+            cpu_usage, memory_usage, disk_usage = self._get_system_usage()
 
             # 记录使用历史
             self._resource_usage_history[ResourceType.CPU].append(cpu_usage)
@@ -732,6 +730,65 @@ class ResourceManager:
 
         except Exception as e:
             logger.error(f"Resource usage collection failed: {e}")
+
+    def _get_system_capacity(self) -> tuple[int, float, float]:
+        """获取系统容量（CPU核数/内存GB/磁盘GB）"""
+        cpu_count = os.cpu_count() or 1
+        memory_total_gb = 0.0
+        disk_total_gb = 0.0
+
+        if hasattr(os, "sysconf"):
+            try:
+                page_size = os.sysconf("SC_PAGE_SIZE")
+                phys_pages = os.sysconf("SC_PHYS_PAGES")
+                memory_total_gb = (float(page_size) * float(phys_pages)) / (1024 ** 3)
+            except (ValueError, OSError):
+                memory_total_gb = 0.0
+
+        try:
+            usage = shutil.disk_usage("/")
+            disk_total_gb = usage.total / (1024 ** 3)
+        except Exception:
+            disk_total_gb = 0.0
+
+        return cpu_count, memory_total_gb or 1.0, disk_total_gb or 1.0
+
+    def _get_system_usage(self) -> tuple[float, float, float]:
+        """获取系统使用率（CPU/内存/磁盘）"""
+        cpu_usage = 0.0
+        memory_usage = 0.0
+        disk_usage = 0.0
+
+        cpu_count = os.cpu_count() or 1
+        if hasattr(os, "getloadavg"):
+            load1, _, _ = os.getloadavg()
+            cpu_usage = min(1.0, float(load1) / float(cpu_count))
+
+        total_mem = None
+        if hasattr(os, "sysconf"):
+            try:
+                page_size = os.sysconf("SC_PAGE_SIZE")
+                phys_pages = os.sysconf("SC_PHYS_PAGES")
+                total_mem = float(page_size) * float(phys_pages)
+            except (ValueError, OSError):
+                total_mem = None
+
+        try:
+            rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            rss_bytes = float(rss_kb) * 1024.0
+            if total_mem and total_mem > 0:
+                memory_usage = min(1.0, rss_bytes / total_mem)
+        except Exception:
+            pass
+
+        try:
+            usage = shutil.disk_usage("/")
+            if usage.total > 0:
+                disk_usage = (usage.total - usage.free) / usage.total
+        except Exception:
+            pass
+
+        return cpu_usage, memory_usage, disk_usage
 
     async def _check_resource_thresholds(self) -> None:
         """检查资源阈值"""

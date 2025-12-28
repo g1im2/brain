@@ -24,7 +24,7 @@ class MonitoringHandler(BaseHandler):
         """获取告警信息"""
         try:
             system_monitor = self.get_app_component(request, 'system_monitor')
-            alerts = await system_monitor.get_active_alerts()
+            alerts = system_monitor.get_active_alerts()
             return self.success_response(alerts)
         except Exception as e:
             self.logger.error(f"Get alerts failed: {e}")
@@ -41,7 +41,7 @@ class MonitoringHandler(BaseHandler):
             if error:
                 return self.error_response(error, 400)
             
-            result = await system_monitor.acknowledge_alert(data['alert_id'])
+            result = system_monitor.acknowledge_alert(data['alert_id'], data.get('notes', ''))
             return self.success_response(result, "告警确认成功")
         except Exception as e:
             self.logger.error(f"Ack alert failed: {e}")
@@ -51,7 +51,7 @@ class MonitoringHandler(BaseHandler):
         """获取系统性能指标"""
         try:
             system_monitor = self.get_app_component(request, 'system_monitor')
-            performance = await system_monitor.get_system_performance()
+            performance = system_monitor.get_system_performance()
             return self.success_response(performance)
         except Exception as e:
             self.logger.error(f"Get performance failed: {e}")
@@ -62,7 +62,20 @@ class MonitoringHandler(BaseHandler):
         try:
             system_monitor = self.get_app_component(request, 'system_monitor')
             health = await system_monitor.check_system_health()
-            return self.success_response(health)
+            return self.success_response({
+                'overall_health': health.overall_health.value,
+                'macro_system_status': health.macro_system_status.value,
+                'portfolio_system_status': health.portfolio_system_status.value,
+                'strategy_system_status': health.strategy_system_status.value,
+                'tactical_system_status': health.tactical_system_status.value,
+                'data_pipeline_status': health.data_pipeline_status.value,
+                'last_update_time': health.last_update_time.isoformat(),
+                'active_sessions': health.active_sessions,
+                'performance_metrics': health.performance_metrics,
+                'error_count': health.error_count,
+                'warning_count': health.warning_count,
+                'metadata': health.metadata
+            })
         except Exception as e:
             self.logger.error(f"Get health status failed: {e}")
             return self.error_response("获取健康状态失败", 500)
@@ -78,7 +91,7 @@ class MonitoringHandler(BaseHandler):
             if error:
                 return self.error_response(error, 400)
             
-            rule = await system_monitor.set_alert_rule(data)
+            rule = system_monitor.set_alert_rule(data)
             return self.success_response(rule, "告警规则设置成功")
         except Exception as e:
             self.logger.error(f"Set alert rule failed: {e}")
@@ -88,7 +101,7 @@ class MonitoringHandler(BaseHandler):
         """获取告警规则"""
         try:
             system_monitor = self.get_app_component(request, 'system_monitor')
-            rules = await system_monitor.get_alert_rules()
+            rules = system_monitor.get_alert_rules()
             return self.success_response(rules)
         except Exception as e:
             self.logger.error(f"Get alert rules failed: {e}")

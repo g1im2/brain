@@ -2,9 +2,13 @@
 系统协调处理器
 """
 
+import json
+import os
+
 from aiohttp import web
 
 from handlers.base import BaseHandler
+from initializers.data_initializer import STATE_PATH
 
 
 class SystemHandler(BaseHandler):
@@ -22,7 +26,7 @@ class SystemHandler(BaseHandler):
         try:
             coordinator = self.get_app_component(request, 'coordinator')
 
-            if coordinator._is_running:
+            if coordinator.is_running():
                 return self.success_response(
                     {'status': 'already_running'},
                     "系统已经在运行中"
@@ -55,7 +59,7 @@ class SystemHandler(BaseHandler):
         try:
             coordinator = self.get_app_component(request, 'coordinator')
 
-            if not coordinator._is_running:
+            if not coordinator.is_running():
                 return self.success_response(
                     {'status': 'already_stopped'},
                     "系统已经停止"
@@ -89,8 +93,8 @@ class SystemHandler(BaseHandler):
             system_status = coordinator.get_system_status()
 
             status_data = {
-                'is_running': coordinator._is_running,
-                'active_cycles': len(coordinator._active_cycles),
+                'is_running': coordinator.is_running(),
+                'active_cycles': len(coordinator.get_active_cycles()),
                 'system_status': {
                     'overall_health': system_status.overall_health.value,
                     'macro_system_status': system_status.macro_system_status.value,
@@ -159,7 +163,7 @@ class SystemHandler(BaseHandler):
             offset = int(query_params.get('offset', 0))
 
             # 获取活动周期（作为历史的一部分）
-            active_cycles = list(coordinator._active_cycles.values())
+            active_cycles = list(coordinator.get_active_cycles().values())
 
             # 转换为响应格式
             history_data = []
@@ -199,7 +203,7 @@ class SystemHandler(BaseHandler):
             coordinator = self.get_app_component(request, 'coordinator')
 
             # 获取资源分配信息
-            resource_allocation = coordinator._resource_allocation
+            resource_allocation = coordinator.get_resource_allocation()
 
             if resource_allocation:
                 resource_data = {
@@ -224,8 +228,6 @@ class SystemHandler(BaseHandler):
         """获取数据初始化进度状态"""
         try:
             # 读取持久化状态文件
-            from initializers.data_initializer import STATE_PATH
-            import os, json
             state: dict | None = None
             if os.path.exists(STATE_PATH):
                 with open(STATE_PATH, 'r', encoding='utf-8') as f:
@@ -245,4 +247,3 @@ class SystemHandler(BaseHandler):
         except Exception as e:
             self.logger.error(f"Get init status failed: {e}")
             return self.error_response("获取初始化状态失败", 500)
-

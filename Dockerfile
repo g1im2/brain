@@ -1,7 +1,7 @@
 # Brain Integration Service Dockerfile
 # AutoTM三层金融交易系统集成协调服务
 
-FROM python:3.11-slim as base
+FROM python:3.11-slim AS base
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1
@@ -13,7 +13,7 @@ ENV TZ=Asia/Shanghai
 RUN apt-get update && apt-get install -y --fix-missing curl && rm -rf /var/lib/apt/lists/*
 
 # 构建阶段
-FROM base as builder
+FROM base AS builder
 
 WORKDIR /app
 
@@ -36,7 +36,7 @@ RUN cd external/asyncron && pip install --no-cache-dir --user .
 COPY . ./
 
 # 运行阶段
-FROM base as runtime
+FROM base AS runtime
 
 # 创建非root用户
 RUN useradd --create-home --shell /bin/bash brain

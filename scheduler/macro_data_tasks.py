@@ -25,29 +25,32 @@ from asyncron import (
     TaskContext
 )
 
+try:
+    from ..adapters import FlowhubAdapter
+except Exception:
+    from adapters import FlowhubAdapter
+
 logger = logging.getLogger(__name__)
 
 
 class MacroDataTaskScheduler:
     """宏观数据任务调度器"""
-    
-    def __init__(self, config=None, coordinator=None):
+
+    def __init__(self, config=None, coordinator=None, app=None):
         """初始化调度器"""
         self.config = config
         self.coordinator = coordinator
+        self.app = app
         self._planer = create_planer()
         self._setup_macro_data_tasks()
-        
+
         logger.info("MacroDataTaskScheduler initialized")
     
     def _setup_macro_data_tasks(self):
         """设置所有14个独立的宏观数据抓取任务"""
 
-        # 设置宏观数据任务
+        # 设置宏观数据任务（包含日度、月度、季度、年度）
         self._setup_daily_macro_tasks()
-        self._setup_monthly_macro_tasks()
-        self._setup_quarterly_macro_tasks()
-        self._setup_yearly_macro_tasks()
 
         # 设置辅助数据任务
         self._setup_auxiliary_data_tasks()
@@ -240,17 +243,17 @@ class MacroDataTaskScheduler:
     
     async def _fetch_single_macro_data(self, data_type: str, frequency: str):
         """抓取单个宏观数据类型
-        
+
         Args:
             data_type: 数据类型
             frequency: 数据频率 (daily, monthly, quarterly, yearly)
         """
         try:
             logger.info(f"Triggering {frequency} {data_type} fetch...")
-            
+
             # 获取FlowhubAdapter实例
             flowhub_adapter = await self._get_flowhub_adapter()
-            
+
             if flowhub_adapter:
                 # 创建数据抓取任务，使用最大历史数据范围
                 job_result = await flowhub_adapter.create_macro_data_job(
@@ -258,10 +261,14 @@ class MacroDataTaskScheduler:
                     incremental=True,  # 使用增量更新
                     max_history=True   # 首次抓取使用最大历史范围
                 )
-                
+
                 job_id = job_result.get('job_id')
                 if job_id:
                     logger.info(f"{data_type} job created: {job_id}")
+
+                    # 通知分析触发调度器任务已完成
+                    await self._notify_task_completed(f"{data_type.replace('-', '_')}_fetch")
+
                     return {'status': 'success', 'job_id': job_id}
                 else:
                     logger.error(f"Failed to create job for {data_type}")
@@ -269,7 +276,7 @@ class MacroDataTaskScheduler:
             else:
                 logger.warning(f"FlowhubAdapter not available for {data_type}")
                 return {'status': 'skipped', 'error': 'FlowhubAdapter not available'}
-                
+
         except Exception as e:
             logger.error(f"{data_type} fetch failed: {e}")
             return {'status': 'failed', 'error': str(e)}
@@ -277,20 +284,32 @@ class MacroDataTaskScheduler:
     async def _get_flowhub_adapter(self):
         """获取FlowhubAdapter实例"""
         try:
-            from ..adapters import FlowhubAdapter
-            
             flowhub_adapter = FlowhubAdapter(self.config)
             connected = await flowhub_adapter.connect_to_system()
-            
+
             if connected:
                 return flowhub_adapter
             else:
                 logger.warning("Failed to connect FlowhubAdapter")
                 return None
-                
+
         except Exception as e:
             logger.error(f"Failed to get FlowhubAdapter: {e}")
             return None
+
+    async def _notify_task_completed(self, task_name: str):
+        """通知分析触发调度器任务已完成
+
+        Args:
+            task_name: 任务名称
+        """
+        try:
+            if self.app and 'analysis_trigger' in self.app:
+                analysis_trigger = self.app['analysis_trigger']
+                await analysis_trigger.mark_task_completed(task_name)
+                logger.info(f"Notified analysis trigger: {task_name} completed")
+        except Exception as e:
+            logger.warning(f"Failed to notify task completion for {task_name}: {e}")
     
     def _setup_auxiliary_data_tasks(self):
         """设置辅助数据定时任务"""
@@ -330,11 +349,9 @@ class MacroDataTaskScheduler:
         # ==================== 板块数据任务 ====================
 
         # 行业板块数据 (每周日 21:00)
-        industry_board_plan = CronPlan(
-            minute=0,
-            hour=21,
-            day_of_week=0,  # 周日
-            timezone=timezone(timedelta(hours=8))
+        industry_board_plan = PlansEvery(
+            time_units=[TimeUnits.WEEKS],
+            every=[1]
         )
 
         @self._planer.task(url='/industry_board_data_fetch', plans=industry_board_plan)
@@ -344,11 +361,9 @@ class MacroDataTaskScheduler:
             await self._fetch_auxiliary_data('industry-board', 'weekly')
 
         # 概念板块数据 (每周日 21:30)
-        concept_board_plan = CronPlan(
-            minute=30,
-            hour=21,
-            day_of_week=0,  # 周日
-            timezone=timezone(timedelta(hours=8))
+        concept_board_plan = PlansEvery(
+            time_units=[TimeUnits.WEEKS],
+            every=[1]
         )
 
         @self._planer.task(url='/concept_board_data_fetch', plans=concept_board_plan)
@@ -356,6 +371,30 @@ class MacroDataTaskScheduler:
             """概念板块数据抓取任务"""
             logger.info("开始执行概念板块数据抓取任务")
             await self._fetch_auxiliary_data('concept-board', 'weekly')
+
+        # 行业板块成分股数据 (每周日 22:00)
+        industry_board_stocks_plan = PlansEvery(
+            time_units=[TimeUnits.WEEKS],
+            every=[1]
+        )
+
+        @self._planer.task(url='/industry_board_stocks_data_fetch', plans=industry_board_stocks_plan)
+        async def industry_board_stocks_data_fetch(context: TaskContext):
+            """行业板块成分股数据抓取任务"""
+            logger.info("开始执行行业板块成分股数据抓取任务")
+            await self._fetch_auxiliary_data('industry-board-stocks', 'weekly')
+
+        # 概念板块成分股数据 (每周日 22:30)
+        concept_board_stocks_plan = PlansEvery(
+            time_units=[TimeUnits.WEEKS],
+            every=[1]
+        )
+
+        @self._planer.task(url='/concept_board_stocks_data_fetch', plans=concept_board_stocks_plan)
+        async def concept_board_stocks_data_fetch(context: TaskContext):
+            """概念板块成分股数据抓取任务"""
+            logger.info("开始执行概念板块成分股数据抓取任务")
+            await self._fetch_auxiliary_data('concept-board-stocks', 'weekly')
 
     async def _fetch_auxiliary_data(self, data_type: str, frequency: str):
         """抓取辅助数据的通用方法"""
@@ -405,6 +444,26 @@ class MacroDataTaskScheduler:
                             "update_mode": "full_update"
                         }
                     })
+                elif data_type == 'industry-board-stocks':
+                    # 行业板块成分股数据抓取 - 全量更新模式
+                    job_result = await flowhub_adapter.send_request({
+                        "method": "POST",
+                        "endpoint": "/api/v1/jobs/industry-board-stocks",
+                        "payload": {
+                            "source": "ths",
+                            "update_mode": "full_update"
+                        }
+                    })
+                elif data_type == 'concept-board-stocks':
+                    # 概念板块成分股数据抓取 - 全量更新模式
+                    job_result = await flowhub_adapter.send_request({
+                        "method": "POST",
+                        "endpoint": "/api/v1/jobs/concept-board-stocks",
+                        "payload": {
+                            "source": "ths",
+                            "update_mode": "full_update"
+                        }
+                    })
                 else:
                     logger.warning(f"Unknown auxiliary data type: {data_type}")
                     return {'status': 'failed', 'error': f'Unknown data type: {data_type}'}
@@ -412,6 +471,10 @@ class MacroDataTaskScheduler:
                 job_id = job_result.get('job_id')
                 if job_id:
                     logger.info(f"{data_type} job created: {job_id}")
+
+                    # 通知分析触发调度器任务已完成
+                    await self._notify_task_completed(f"{data_type.replace('-', '_')}_fetch")
+
                     return {'status': 'success', 'job_id': job_id}
                 else:
                     logger.error(f"Failed to create job for {data_type}")

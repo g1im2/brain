@@ -17,6 +17,8 @@ import threading
 
 from config import IntegrationConfig
 from exceptions import IntegrationException
+from adapters.macro_adapter import MacroAdapter
+from adapters.portfolio_adapter import PortfolioAdapter
 from adapters.strategy_adapter import StrategyAdapter
 
 logger = logging.getLogger(__name__)
@@ -138,6 +140,7 @@ class WorkflowEngine:
         # 工作流执行实例
         self._active_executions: Dict[str, WorkflowExecution] = {}
         self._execution_history: List[WorkflowExecution] = []
+        self._notification_history: List[Dict[str, Any]] = []
         
         # 任务处理器注册表
         self._task_handlers: Dict[str, Callable] = {}
@@ -657,9 +660,6 @@ class WorkflowEngine:
         try:
             # 获取宏观适配器
             if not hasattr(self, '_macro_adapter') or self._macro_adapter is None:
-                from adapters.macro_adapter import MacroAdapter
-                from config import IntegrationConfig
-
                 # 使用默认配置或从kwargs获取配置
                 config = kwargs.get('config') or IntegrationConfig()
                 self._macro_adapter = MacroAdapter(config)
@@ -694,9 +694,6 @@ class WorkflowEngine:
         try:
             # 获取组合适配器
             if not hasattr(self, '_portfolio_adapter') or self._portfolio_adapter is None:
-                from adapters.portfolio_adapter import PortfolioAdapter
-                from config import IntegrationConfig
-
                 # 使用默认配置或从kwargs获取配置
                 config = kwargs.get('config') or IntegrationConfig()
                 self._portfolio_adapter = PortfolioAdapter(config)
@@ -809,13 +806,40 @@ class WorkflowEngine:
 
     async def _handle_validation(self, **kwargs) -> Dict[str, Any]:
         """处理验证任务"""
-        await asyncio.sleep(0.1)  # 模拟处理时间
-        return {"validation_score": 0.85, "confidence": 0.9}
+        validation_type = (kwargs.get('validation_type') or 'backtest').lower()
+        if validation_type in ('backtest', 'historical'):
+            return await self._handle_backtest_validation(**kwargs)
+        if validation_type in ('realtime', 'forward'):
+            return await self._handle_realtime_validation(**kwargs)
+        if validation_type == 'dual':
+            backtest_result = await self._handle_backtest_validation(**kwargs)
+            realtime_result = await self._handle_realtime_validation(**kwargs)
+            score = (
+                float(backtest_result.get('validation_score', 0.0)) +
+                float(realtime_result.get('validation_score', 0.0))
+            ) / 2.0
+            return {
+                'status': 'validated',
+                'validation_type': 'dual',
+                'validation_score': score,
+                'backtest': backtest_result,
+                'realtime': realtime_result
+            }
+        raise IntegrationException(f"Unknown validation type: {validation_type}")
 
     async def _handle_notification(self, **kwargs) -> Dict[str, Any]:
         """处理通知任务"""
-        await asyncio.sleep(0.01)  # 模拟处理时间
-        return {"notification_sent": True}
+        notification = {
+            'notification_id': f"notice_{datetime.now().timestamp()}",
+            'channel': kwargs.get('channel', 'log'),
+            'recipients': kwargs.get('recipients', []),
+            'message': kwargs.get('message', ''),
+            'severity': kwargs.get('severity', 'info'),
+            'timestamp': datetime.now().isoformat()
+        }
+        self._notification_history.append(notification)
+        logger.info(f"Notification recorded: {notification['notification_id']}")
+        return {"notification_sent": True, "notification": notification}
 
     async def _wait_for_active_executions(self) -> None:
         """等待活跃执行完成"""

@@ -6,9 +6,14 @@
 
 import asyncio
 import logging
+import os
+import resource
+import shutil
+from collections import deque, defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
-from collections import deque, defaultdict
+
+from dataclasses import asdict
 
 from models import SystemStatus, PerformanceMetrics, AlertInfo, SystemHealthStatus
 from config import IntegrationConfig
@@ -37,6 +42,7 @@ class SystemMonitor:
         self._performance_history: deque = deque(maxlen=1000)
         self._health_history: deque = deque(maxlen=100)
         self._alert_history: deque = deque(maxlen=500)
+        self._alert_rules: List[Dict[str, Any]] = []
         
         # 当前状态
         self._current_system_status = SystemStatus(
@@ -210,7 +216,7 @@ class SystemMonitor:
             logger.error(f"System health check failed: {e}")
             raise MonitoringException(f"Health check failed: {e}")
     
-    async def collect_performance_metrics(self) -> PerformanceMetrics:
+    async def collect_performance_metrics(self) -> Dict[str, Any]:
         """收集性能指标
         
         Returns:
@@ -219,14 +225,10 @@ class SystemMonitor:
         try:
             current_time = datetime.now()
             
-            # 收集系统资源使用情况 (模拟数据，因为psutil不可用)
-            cpu_usage = 0.15  # 模拟15%的CPU使用率
-            memory_usage = 0.25  # 模拟25%的内存使用率
-
-            # 收集网络和磁盘信息 (模拟数据)
-            disk_usage = 0.30  # 模拟30%的磁盘使用率
+            # 收集系统资源使用情况（优先使用系统数据）
+            cpu_usage, memory_usage, disk_usage = self._get_system_resource_usage()
             
-            # 模拟应用层性能指标
+            # 应用层性能指标
             response_time = await self._measure_response_time()
             throughput = await self._measure_throughput()
             error_rate = await self._calculate_error_rate()
@@ -255,7 +257,7 @@ class SystemMonitor:
             # 检查性能阈值
             await self._check_performance_thresholds(metrics)
             
-            return metrics
+            return self._serialize_performance_metrics(metrics)
             
         except Exception as e:
             logger.error(f"Performance metrics collection failed: {e}")
@@ -268,6 +270,76 @@ class SystemMonitor:
             SystemStatus: 当前系统状态
         """
         return self._current_system_status
+
+    def get_active_alerts(self) -> List[Dict[str, Any]]:
+        """获取未解决告警"""
+        return [
+            self._serialize_alert(alert)
+            for alert in self._alert_history
+            if not alert.is_resolved
+        ]
+
+    def get_alert_rules(self) -> List[Dict[str, Any]]:
+        """获取告警规则"""
+        return list(self._alert_rules)
+
+    def get_system_performance(self, hours: int = 1) -> Dict[str, Any]:
+        """获取系统性能摘要"""
+        history = self.get_performance_history(hours=hours)
+        latest = history[-1] if history else None
+
+        summary = {
+            'latest': self._serialize_performance_metrics(latest) if latest else None,
+            'history_size': len(history),
+            'averages': {}
+        }
+
+        if history:
+            summary['averages'] = {
+                'cpu_usage': sum(m.cpu_usage for m in history) / len(history),
+                'memory_usage': sum(m.memory_usage for m in history) / len(history),
+                'response_time': sum(m.response_time for m in history) / len(history),
+                'throughput': sum(m.throughput for m in history) / len(history),
+                'error_rate': sum(m.error_rate for m in history) / len(history),
+                'availability': sum(m.availability for m in history) / len(history)
+            }
+
+        return summary
+
+    def acknowledge_alert(self, alert_id: str, notes: str = "") -> Dict[str, Any]:
+        """确认告警"""
+        for alert in self._alert_history:
+            if alert.alert_id == alert_id:
+                if not alert.is_resolved:
+                    alert.is_resolved = True
+                    alert.resolution_time = datetime.now()
+                    alert.resolution_notes = notes or "acknowledged"
+                return self._serialize_alert(alert)
+        raise MonitoringException(f"Alert not found: {alert_id}")
+
+    def set_alert_rule(self, rule: Dict[str, Any]) -> Dict[str, Any]:
+        """设置告警规则"""
+        rule_id = rule.get('rule_id') or f"rule_{datetime.now().timestamp()}"
+        normalized = {
+            'rule_id': rule_id,
+            'name': rule.get('name'),
+            'condition': rule.get('condition'),
+            'threshold': rule.get('threshold'),
+            'enabled': bool(rule.get('enabled', True)),
+            'created_at': datetime.now().isoformat(),
+            'metadata': rule.get('metadata', {})
+        }
+
+        # 同步到性能阈值（若规则是标准指标）
+        condition = normalized.get('condition')
+        if condition in self._performance_thresholds and normalized.get('threshold') is not None:
+            try:
+                self._performance_thresholds[condition] = float(normalized['threshold'])
+            except (TypeError, ValueError):
+                pass
+
+        self._alert_rules.append(normalized)
+        return normalized
     
     def get_monitoring_statistics(self) -> Dict[str, Any]:
         """获取监控统计信息
@@ -443,14 +515,14 @@ class SystemMonitor:
                 return SystemHealthStatus.CRITICAL
 
             # 检查信号队列状态
-            if hasattr(self._signal_router, '_signal_queue'):
-                queue_size = self._signal_router._signal_queue.qsize()
-                max_queue_size = getattr(self._signal_router.config.signal_router, 'max_queue_size', 1000)
-
-                if queue_size >= max_queue_size:
-                    return SystemHealthStatus.CRITICAL
-                elif queue_size > max_queue_size * 0.8:
-                    return SystemHealthStatus.WARNING
+            if hasattr(self._signal_router, '_signal_queues'):
+                max_queue_size = getattr(self._signal_router.config.signal_router, 'max_signal_queue_size', 1000)
+                for queue in self._signal_router._signal_queues.values():
+                    queue_size = queue.qsize()
+                    if queue_size >= max_queue_size:
+                        return SystemHealthStatus.CRITICAL
+                    if queue_size > max_queue_size * 0.8:
+                        return SystemHealthStatus.WARNING
 
             return SystemHealthStatus.HEALTHY
 
@@ -582,37 +654,109 @@ class SystemMonitor:
     
     async def _measure_response_time(self) -> float:
         """测量响应时间"""
-        # 模拟响应时间测量
-        return 150.0  # 毫秒
+        if self._data_flow_manager and hasattr(self._data_flow_manager, 'get_pipeline_status'):
+            status = self._data_flow_manager.get_pipeline_status()
+            if status and status.latency:
+                return float(status.latency)
+        return 0.0
     
     async def _measure_throughput(self) -> float:
         """测量吞吐量"""
-        # 模拟吞吐量测量
-        return 100.0  # 请求/秒
+        if self._data_flow_manager and hasattr(self._data_flow_manager, 'get_pipeline_status'):
+            status = self._data_flow_manager.get_pipeline_status()
+            if status and status.throughput:
+                return float(status.throughput)
+        return 0.0
     
     async def _calculate_error_rate(self) -> float:
         """计算错误率"""
-        # 模拟错误率计算
-        return 0.02  # 2%
+        if self._data_flow_manager and hasattr(self._data_flow_manager, 'get_pipeline_status'):
+            status = self._data_flow_manager.get_pipeline_status()
+            if status and status.error_rate is not None:
+                return float(status.error_rate)
+        return 0.0
     
     async def _calculate_availability(self) -> float:
         """计算可用性"""
-        # 模拟可用性计算
-        return 0.999  # 99.9%
+        if self._current_system_status.overall_health == SystemHealthStatus.HEALTHY:
+            return 1.0
+        if self._current_system_status.overall_health == SystemHealthStatus.WARNING:
+            return 0.995
+        if self._current_system_status.overall_health == SystemHealthStatus.CRITICAL:
+            return 0.95
+        return 0.98
     
     def _get_active_connections(self) -> int:
         """获取活跃连接数"""
-        # 模拟活跃连接数
-        return 25
+        if self._data_flow_manager and hasattr(self._data_flow_manager, 'get_pipeline_status'):
+            status = self._data_flow_manager.get_pipeline_status()
+            if status and status.active_connections is not None:
+                return int(status.active_connections)
+        return 0
     
     def _get_queue_sizes(self) -> Dict[str, int]:
         """获取队列大小"""
-        # 模拟队列大小
-        return {
-            'signal_queue': 10,
-            'data_queue': 5,
-            'validation_queue': 3
-        }
+        queue_sizes: Dict[str, int] = {}
+        if self._signal_router and hasattr(self._signal_router, '_signal_queues'):
+            for name, queue in self._signal_router._signal_queues.items():
+                try:
+                    queue_sizes[name] = queue.qsize()
+                except Exception:
+                    queue_sizes[name] = 0
+        return queue_sizes
+
+    def _get_system_resource_usage(self) -> tuple[float, float, float]:
+        """获取系统资源使用率（CPU/内存/磁盘）"""
+        cpu_usage = 0.0
+        memory_usage = 0.0
+        disk_usage = 0.0
+
+        try:
+            cpu_count = os.cpu_count() or 1
+            if hasattr(os, "getloadavg"):
+                load1, _, _ = os.getloadavg()
+                cpu_usage = min(1.0, float(load1) / float(cpu_count))
+
+            # 内存使用率（优先取系统总量 + 进程占用）
+            total_mem = None
+            if hasattr(os, "sysconf"):
+                try:
+                    page_size = os.sysconf("SC_PAGE_SIZE")
+                    phys_pages = os.sysconf("SC_PHYS_PAGES")
+                    total_mem = float(page_size) * float(phys_pages)
+                except (ValueError, OSError):
+                    total_mem = None
+
+            try:
+                rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                rss_bytes = float(rss_kb) * 1024.0
+                if total_mem and total_mem > 0:
+                    memory_usage = min(1.0, rss_bytes / total_mem)
+            except Exception:
+                pass
+
+            usage = shutil.disk_usage("/")
+            if usage.total > 0:
+                disk_usage = (usage.total - usage.free) / usage.total
+
+        except Exception:
+            pass
+
+        return cpu_usage, memory_usage, disk_usage
+
+    def _serialize_performance_metrics(self, metrics: Optional[PerformanceMetrics]) -> Optional[Dict[str, Any]]:
+        if not metrics:
+            return None
+        data = asdict(metrics)
+        data['timestamp'] = metrics.timestamp.isoformat()
+        return data
+
+    def _serialize_alert(self, alert: AlertInfo) -> Dict[str, Any]:
+        data = asdict(alert)
+        data['timestamp'] = alert.timestamp.isoformat()
+        data['resolution_time'] = alert.resolution_time.isoformat() if alert.resolution_time else None
+        data['duration'] = alert.duration
+        return data
     
     async def _check_performance_thresholds(self, metrics: PerformanceMetrics) -> None:
         """检查性能阈值"""

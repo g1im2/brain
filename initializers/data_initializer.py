@@ -3,7 +3,8 @@ Data Initialization Coordinator for brain service
 
 - Waits for dependencies (Flowhub) to be healthy
 - Coordinates phased data initialization jobs via FlowhubAdapter
-- Persists init state for idempotency and progress reporting
+- Persists init state for progress tracking and monitoring (NOT for idempotency)
+- Every startup triggers data fetch; Flowhub decides incremental fetch range based on DB state
 """
 from __future__ import annotations
 
@@ -50,10 +51,15 @@ class InitPhaseState:
 
 @dataclass
 class InitState:
+    """初始化状态
+
+    注意：completed_at 仅用于记录最后一次成功执行的时间，不作为跳过标记。
+    每次 Brain 启动都会触发数据拉取，由 Flowhub 根据数据库状态决定增量拉取范围。
+    """
     version: str = "1.0"
-    started_at: Optional[str] = None
-    completed_at: Optional[str] = None
-    last_updated: Optional[str] = None
+    started_at: Optional[str] = None  # 当前执行周期的开始时间
+    completed_at: Optional[str] = None  # 最后一次成功完成的时间（仅用于监控）
+    last_updated: Optional[str] = None  # 状态文件最后更新时间
     phases: Dict[str, InitPhaseState] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -105,13 +111,24 @@ class DataInitializationCoordinator:
         self.state.save(self.state_path)
 
     async def run(self) -> None:
-        """Run initialization in background (non-blocking for app)."""
+        """Run initialization in background (non-blocking for app).
+
+        每次启动都会执行数据拉取，由 Flowhub 根据数据库状态决定增量拉取范围。
+        不再使用 completed_at 作为跳过标记，而是记录最后执行时间用于监控。
+        """
         logger.info("DataInitializationCoordinator started")
-        # idempotency: if already completed recently, skip
+
+        # 记录本次执行的开始时间（不再检查 completed_at）
+        current_run_start = _now_iso()
+        logger.info(f"Starting data initialization run at {current_run_start}")
+
+        # 如果有上次执行记录，记录日志
         if self.state.completed_at:
-            logger.info("Initialization already completed at %s, skipping", self.state.completed_at)
-            return
-        self.state.started_at = self.state.started_at or _now_iso()
+            logger.info(f"Last initialization completed at {self.state.completed_at}")
+
+        # 重置状态为新的执行周期
+        self.state.started_at = current_run_start
+        self.state.completed_at = None  # 清除完成标记，表示正在执行
         self.state.save(self.state_path)
 
         try:
@@ -121,13 +138,17 @@ class DataInitializationCoordinator:
             await self._run_phase("macro_core", self._phase_macro_core)
             await self._run_phase("equities", self._phase_equities)
             await self._run_phase("macro_rest", self._phase_macro_rest)
-            # mark completed
+
+            # 记录本次执行完成时间（用于监控，不作为跳过标记）
             self.state.completed_at = _now_iso()
             self.state.save(self.state_path)
-            logger.info("Data initialization completed")
+            logger.info(f"Data initialization completed at {self.state.completed_at}")
+            logger.info("Next startup will trigger data fetch again (incremental by Flowhub)")
         except Exception as e:
             logger.error(f"Initialization failed: {e}")
-            # keep state for next restart retry
+            # 保存失败状态，但不设置 completed_at
+            self.state.save(self.state_path)
+            logger.info("Initialization failed, will retry on next startup")
 
     async def _wait_dependencies(self) -> None:
         deps = getattr(self.config.service, "init_wait_dependencies", ["flowhub"]) or ["flowhub"]
@@ -164,13 +185,24 @@ class DataInitializationCoordinator:
             await asyncio.sleep(delay)
 
     async def _run_phase(self, name: str, fn) -> None:
+        """执行初始化阶段
+
+        每次启动都会重新执行所有阶段，不再跳过已完成的阶段。
+        Flowhub 会根据数据库状态自动决定增量拉取范围。
+        """
         phase = self.state.phases[name]
+
+        # 记录上次执行状态（用于监控）
         if phase.status in ("completed", "skipped"):
-            logger.info("Phase %s already %s, skipping", name, phase.status)
-            return
+            logger.info(f"Phase {name} was previously {phase.status}, re-running for incremental update")
+
+        # 重置阶段状态为运行中
         phase.status = "running"
-        phase.started_at = phase.started_at or _now_iso()
+        phase.started_at = _now_iso()
+        phase.job_ids = []  # 清空旧的 job_ids
+        phase.errors = []   # 清空旧的错误记录
         self.state.save(self.state_path)
+
         try:
             jobs = await fn()
             if jobs:
@@ -178,12 +210,12 @@ class DataInitializationCoordinator:
             phase.status = "completed"
             phase.completed_at = _now_iso()
             self.state.save(self.state_path)
-            logger.info("Phase %s completed with %d jobs", name, len(jobs or []))
+            logger.info(f"Phase {name} completed with {len(jobs or [])} jobs")
         except Exception as e:
             phase.status = "failed"
             phase.errors.append(str(e))
             self.state.save(self.state_path)
-            logger.error("Phase %s failed: %s", name, e)
+            logger.error(f"Phase {name} failed: {e}")
             # do not raise to keep app running
 
     # ===== Phases =====

@@ -23,6 +23,7 @@ from exceptions import (
 from routers.conflict_resolver import ConflictResolver
 from routers.signal_processor import SignalProcessor
 from adapters.strategy_adapter import StrategyAdapter
+from adapters.portfolio_adapter import PortfolioAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -380,9 +381,6 @@ class SignalRouter(ISignalRouter):
         try:
             # 获取组合适配器
             if not hasattr(self, '_portfolio_adapter') or self._portfolio_adapter is None:
-                from ..adapters.portfolio_adapter import PortfolioAdapter
-                from ..config import IntegrationConfig
-
                 config = getattr(self, 'config', IntegrationConfig())
                 self._portfolio_adapter = PortfolioAdapter(config)
                 await self._portfolio_adapter.connect_to_system()

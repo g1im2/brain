@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 from typing import AsyncGenerator, Generator
 
 from ..config import IntegrationConfig
-from ..container import DIContainer, ServiceRegistry
+from ..container import DIContainer, DIServiceRegistry
 from ..models import SystemStatus, SystemHealthStatus
 
 
@@ -49,7 +49,7 @@ def test_config() -> IntegrationConfig:
 async def di_container(test_config: IntegrationConfig) -> AsyncGenerator[DIContainer, None]:
     """依赖注入容器"""
     container = DIContainer()
-    await ServiceRegistry.register_core_services(container, test_config)
+    await DIServiceRegistry.register_core_services(container, test_config)
     yield container
 
 
