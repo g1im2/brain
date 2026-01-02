@@ -237,6 +237,8 @@ class AnalysisTriggerScheduler:
             }
             
             result = await macro_adapter.trigger_macro_analysis(analysis_params)
+            if isinstance(result, dict) and result.get('job_id') and not result.get('job'):
+                result['job'] = await macro_adapter.get_job_status(result['job_id'])
             logger.info(f"宏观分析任务已触发: {result}")
             
         except Exception as e:
@@ -276,5 +278,4 @@ class AnalysisTriggerScheduler:
         except Exception as e:
             logger.error(f"触发股票批量分析失败: {e}", exc_info=True)
     
-
 

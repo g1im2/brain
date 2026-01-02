@@ -91,19 +91,39 @@ class MacroAdapter(ISystemAdapter):
             bool: 系统是否健康
         """
         try:
+            if self._http_client and getattr(self._http_client, "_session", None) is None:
+                await self._http_client.start()
             health_data = await self._http_client.health_check()
             self._last_health_check = datetime.now()
 
-            if health_data.get('status') == 'healthy':
+            if self._validate_health_response(health_data):
                 logger.debug("Macro system health check passed")
                 return True
             else:
-                logger.warning("Macro system health check failed")
+                logger.warning(f"Macro system health check failed: {health_data}")
                 return False
 
         except Exception as e:
             logger.error(f"Macro system health check error: {e}")
             raise HealthCheckException(f"Health check failed: {e}")
+
+    def _validate_health_response(self, response: Dict[str, Any]) -> bool:
+        """验证健康检查响应，兼容多种返回格式"""
+        if not isinstance(response, dict):
+            return False
+        status_top = response.get('status')
+        data = response.get('data', {}) if isinstance(response.get('data'), dict) else {}
+        status_data = data.get('status')
+        service_name = response.get('service') or data.get('service')
+        timestamp = response.get('timestamp') or data.get('timestamp')
+
+        is_ok = (
+            status_top == 'healthy' or
+            status_data == 'healthy' or
+            (status_top == 'success' and status_data == 'healthy')
+        )
+        has_service = service_name in ('macro-strategy', 'macro_strategy', 'macro')
+        return bool(is_ok and has_service and timestamp is not None)
 
     async def send_request(self, request: Any) -> Any:
         """发送请求到宏观系统
@@ -162,7 +182,15 @@ class MacroAdapter(ISystemAdapter):
         """
         try:
             response = await self._http_client.post('analysis', analysis_params or {})
-            return response.get('data', {})
+            job_id = response.get('task_id') if isinstance(response, dict) else None
+            if job_id:
+                job = await self.get_job_status(job_id)
+                return {
+                    'job_id': job_id,
+                    'status': response.get('status', 'accepted'),
+                    'job': job
+                }
+            return response.get('data', response)
 
         except Exception as e:
             logger.error(f"Failed to trigger macro analysis: {e}")
@@ -198,6 +226,27 @@ class MacroAdapter(ISystemAdapter):
 
         except Exception as e:
             logger.error(f"Failed to get market cycle position: {e}")
+            raise
+
+    async def get_job_status(self, job_id: str) -> Dict[str, Any]:
+        """获取宏观任务状态（统一Job接口）"""
+        try:
+            response = await self._http_client.get(f'/api/v1/jobs/{job_id}')
+            return response.get('data', {})
+        except Exception as e:
+            logger.error(f"Failed to get macro job status: {e}")
+            raise
+
+    async def list_jobs(self, status: str = None, limit: int = 20, offset: int = 0) -> Dict[str, Any]:
+        """获取宏观任务列表（统一Job接口）"""
+        try:
+            params = {'limit': limit, 'offset': offset}
+            if status:
+                params['status'] = status
+            response = await self._http_client.get('/api/v1/jobs', params)
+            return response.get('data', {})
+        except Exception as e:
+            logger.error(f"Failed to list macro jobs: {e}")
             raise
 
     def get_connection_statistics(self) -> Dict[str, Any]:

@@ -7,6 +7,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -212,8 +213,17 @@ class StrategyAdapter(ISystemAdapter):
                 # 发送请求到execution服务
                 response = await self._http_client.post('analyze/batch', mapped_request)
 
-                # 处理响应
-                processed_response = await self.handle_response(response)
+                # 如果是异步任务，等待 Job 完成后再处理结果
+                job_id = self._extract_job_id(response)
+                if job_id:
+                    job = await self._wait_for_job_completion(job_id, timeout=1800)
+                    execution_payload = self._build_analysis_payload(job.get('result'))
+                    processed_response = await self.handle_response({
+                        'success': True,
+                        'data': execution_payload
+                    })
+                else:
+                    processed_response = await self.handle_response(response)
 
                 # 更新统计
                 response_time = (datetime.now() - start_time).total_seconds()
@@ -354,14 +364,16 @@ class StrategyAdapter(ISystemAdapter):
             # 发送回测请求
             response = await self._http_client.post('backtest/run', backtest_request)
 
-            # 如果是异步任务，需要轮询结果
-            if response.get('success') and 'task_id' in response.get('data', {}):
-                task_id = response['data']['task_id']
-                result = await self._poll_backtest_result(task_id)
+            job_id = self._extract_job_id(response)
+            if job_id:
+                job = await self._wait_for_job_completion(job_id, timeout=1800)
+                result = {
+                    'success': True,
+                    'data': job.get('result', {})
+                }
             else:
                 result = response
 
-            # 映射响应格式
             mapped_result = self._request_mapper.map_backtest_response(result)
 
             logger.info(f"Backtest validation completed for {len(symbols)} symbols")
@@ -411,6 +423,52 @@ class StrategyAdapter(ISystemAdapter):
         except Exception as e:
             logger.error(f"Realtime validation request failed: {e}")
             raise AdapterException("StrategyAdapter", f"Realtime validation failed: {e}")
+
+    def _extract_job_id(self, response: Dict[str, Any]) -> Optional[str]:
+        data = response.get('data') if isinstance(response, dict) else None
+        if isinstance(data, dict):
+            return data.get('job_id') or data.get('task_id')
+        return response.get('job_id') if isinstance(response, dict) else None
+
+    async def _wait_for_job_completion(self, job_id: str, timeout: int = 600, poll_interval: int = 2) -> Dict[str, Any]:
+        start_time = time.monotonic()
+        while True:
+            job_response = await self._http_client.get(f'/api/v1/jobs/{job_id}')
+            job = job_response.get('data') if isinstance(job_response, dict) else job_response
+            status = (job.get('status') or '').lower()
+            if status in ('succeeded', 'success', 'completed'):
+                return job
+            if status in ('failed', 'cancelled'):
+                raise AdapterException("StrategyAdapter", f"Job {job_id} failed with status {status}")
+            if time.monotonic() - start_time > timeout:
+                raise AdapterException("StrategyAdapter", f"Job {job_id} timed out")
+            await asyncio.sleep(poll_interval)
+
+    def _build_analysis_payload(self, job_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not job_result:
+            return {}
+        if 'results' in job_result:
+            return job_result
+        results_map: Dict[str, Any] = {}
+        for item in job_result.get('data', []) or []:
+            if item.get('status') != 'success':
+                continue
+            symbol = item.get('symbol')
+            result = item.get('result') or {}
+            aggregated = result.get('aggregated') or {}
+            analyzer_scores: Dict[str, Any] = {}
+            for name, score in (result.get('results') or {}).items():
+                if isinstance(score, dict):
+                    analyzer_scores[name] = score.get('strength', score.get('confidence', 0.0))
+                else:
+                    analyzer_scores[name] = score
+            if symbol:
+                results_map[symbol] = {
+                    'overall_score': aggregated.get('strength', aggregated.get('confidence', 0.5)),
+                    'confidence': aggregated.get('confidence', 0.5),
+                    'analyzer_scores': analyzer_scores
+                }
+        return {'results': results_map}
 
 
     async def query_analysis_history(self,

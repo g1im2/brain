@@ -162,6 +162,27 @@ class PortfolioAdapter(ISystemAdapter):
         except Exception as e:
             logger.error(f"Portfolio system health check error: {e}")
             raise HealthCheckException("PortfolioAdapter", "portfolio_management", str(e))
+
+    async def get_job_status(self, job_id: str) -> Dict[str, Any]:
+        """获取组合任务状态（统一Job接口）"""
+        try:
+            response = await self._http_client.get(f'/api/v1/jobs/{job_id}')
+            return response.get('data', {})
+        except Exception as e:
+            logger.error(f"Failed to get portfolio job status: {e}")
+            raise
+
+    async def list_jobs(self, status: str = None, limit: int = 20, offset: int = 0) -> Dict[str, Any]:
+        """获取组合任务列表（统一Job接口）"""
+        try:
+            params = {'limit': limit, 'offset': offset}
+            if status:
+                params['status'] = status
+            response = await self._http_client.get('/api/v1/jobs', params)
+            return response.get('data', {})
+        except Exception as e:
+            logger.error(f"Failed to list portfolio jobs: {e}")
+            raise
     
     async def get_system_status(self) -> Dict[str, Any]:
         """获取系统状态
@@ -424,6 +445,8 @@ class PortfolioAdapter(ISystemAdapter):
             'execution_priority': instruction.get('execution_priority', 3),
             'expected_return': float(instruction.get('expected_return', 0.0)),
             'expected_volatility': float(instruction.get('expected_volatility', 0.0)),
+            'job_id': instruction.get('job_id'),
+            'job_status': instruction.get('job_status', 'succeeded'),
             'timestamp': datetime.now().isoformat(),
             'source': 'portfolio_management_system'
         }

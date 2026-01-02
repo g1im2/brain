@@ -78,6 +78,27 @@ class ExecutionAdapter:
         except Exception as e:
             logger.error(f"Failed to trigger batch analysis: {e}")
             raise
+
+    async def get_job_status(self, job_id: str) -> Dict[str, Any]:
+        """获取执行任务状态（统一Job接口）"""
+        try:
+            response = await self._http_client.get(f'/api/v1/jobs/{job_id}')
+            return response.get('data', {})
+        except Exception as e:
+            logger.error(f"Failed to get execution job status: {e}")
+            raise
+
+    async def list_jobs(self, status: str = None, limit: int = 20, offset: int = 0) -> Dict[str, Any]:
+        """获取执行任务列表（统一Job接口）"""
+        try:
+            params = {'limit': limit, 'offset': offset}
+            if status:
+                params['status'] = status
+            response = await self._http_client.get('/api/v1/jobs', params)
+            return response.get('data', {})
+        except Exception as e:
+            logger.error(f"Failed to list execution jobs: {e}")
+            raise
     
     async def get_analysis_result(self, task_id: str) -> Dict[str, Any]:
         """获取分析结果
@@ -117,7 +138,7 @@ class ExecutionAdapter:
             Exception: 调用失败时抛出异常
         """
         try:
-            response = await self._http_client.get(f'tasks/{task_id}/status')
+            response = await self._http_client.get(f'/api/v1/jobs/{task_id}')
             return response.get('data', {})
             
         except Exception as e:
@@ -199,4 +220,3 @@ class ExecutionAdapter:
         except Exception as e:
             logger.error(f"Health check failed: {e}")
             return False
-
