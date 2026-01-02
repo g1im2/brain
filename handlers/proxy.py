@@ -42,11 +42,11 @@ class ProxyHandler(BaseHandler):
         if scope == 'flowhub':
             return 'flowhub', path.replace('/api/v1/flowhub', '/api/v1', 1)
         if scope in ('macro', 'market', 'theories'):
-            return 'macro'
+            return 'macro', path
         if scope in ('analyze', 'backtest', 'strategy', 'realtime', 'quantum'):
-            return 'execution'
+            return 'execution', path
         if scope in ('portfolio', 'portfolios'):
-            return 'portfolio'
+            return 'portfolio', path
         return None, path
 
     async def proxy(self, request: web.Request) -> web.Response:
