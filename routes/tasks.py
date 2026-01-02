@@ -26,7 +26,12 @@ def setup_task_routes(app: web.Application, cors: CorsConfig = None):
     route = app.router.add_get('/api/v1/tasks', task_handler.list_tasks)
     if cors:
         cors.add(route)
-    
+
+    # 获取跨服务任务概览
+    route = app.router.add_get('/api/v1/tasks/overview', task_handler.list_tasks_overview)
+    if cors:
+        cors.add(route)
+
     # 创建定时任务
     route = app.router.add_post('/api/v1/tasks', task_handler.create_task)
     if cors:

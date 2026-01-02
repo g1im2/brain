@@ -3,12 +3,73 @@
 """
 
 from aiohttp import web
+from typing import Any, Dict, List
 
 from handlers.base import BaseHandler
 
 
 class TaskHandler(BaseHandler):
     """定时任务处理器"""
+
+    async def list_tasks_overview(self, request: web.Request) -> web.Response:
+        """获取跨服务任务概览（含 Flowhub/Execution/Macro/Portfolio/Brain）"""
+        query_params = self.get_query_params(request)
+        limit = int(query_params.get('limit', 200))
+        offset = int(query_params.get('offset', 0))
+
+        tasks: List[Dict[str, Any]] = []
+        errors: List[Dict[str, str]] = []
+
+        # Brain 定时任务
+        try:
+            scheduler = self.get_app_component(request, 'scheduler')
+            brain_tasks = await scheduler.get_all_tasks()
+            tasks.extend([self._normalize_brain_task(t) for t in brain_tasks])
+        except Exception as e:
+            self.logger.warning(f"Load brain tasks failed: {e}")
+            errors.append({'service': 'brain', 'error': str(e)})
+
+        # Flowhub 任务调度列表
+        try:
+            flowhub_limit = min(limit, 100)
+            flowhub_payload = await self._fetch_service_json(request, 'flowhub', '/api/v1/tasks', {
+                'limit': flowhub_limit,
+                'offset': offset
+            })
+            flowhub_data = flowhub_payload.get('data') if isinstance(flowhub_payload, dict) else None
+            flowhub_tasks = []
+            if isinstance(flowhub_data, dict):
+                flowhub_tasks = flowhub_data.get('tasks', [])
+            elif isinstance(flowhub_payload, dict):
+                flowhub_tasks = flowhub_payload.get('tasks', [])
+            elif isinstance(flowhub_payload, list):
+                flowhub_tasks = flowhub_payload
+            tasks.extend([self._normalize_flowhub_task(t) for t in flowhub_tasks])
+        except Exception as e:
+            self.logger.warning(f"Load flowhub tasks failed: {e}")
+            errors.append({'service': 'flowhub', 'error': str(e)})
+
+        # Execution/Macro/Portfolio Job 列表
+        for service in ('execution', 'macro', 'portfolio'):
+            try:
+                job_payload = await self._fetch_service_json(request, service, '/api/v1/jobs', {
+                    'limit': limit,
+                    'offset': offset
+                })
+                job_data = job_payload.get('data') if isinstance(job_payload, dict) else None
+                jobs = []
+                if isinstance(job_data, dict):
+                    jobs = job_data.get('jobs', [])
+                elif isinstance(job_payload, dict):
+                    jobs = job_payload.get('jobs', [])
+                elif isinstance(job_payload, list):
+                    jobs = job_payload
+                tasks.extend([self._normalize_job_task(service, j) for j in jobs])
+            except Exception as e:
+                self.logger.warning(f"Load {service} jobs failed: {e}")
+                errors.append({'service': service, 'error': str(e)})
+
+        return self.success_response({'tasks': tasks, 'errors': errors})
     
     async def list_tasks(self, request: web.Request) -> web.Response:
         """获取任务列表"""
@@ -125,3 +186,86 @@ class TaskHandler(BaseHandler):
         except Exception as e:
             self.logger.error(f"Get task history failed: {e}")
             return self.error_response("获取任务历史失败", 500)
+
+    async def _fetch_service_json(
+        self,
+        request: web.Request,
+        service_name: str,
+        path: str,
+        params: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        registry = self.get_app_component(request, 'service_registry')
+        service = getattr(registry, '_services', {}).get(service_name)
+        session = getattr(registry, '_session', None)
+        if not service or session is None:
+            raise RuntimeError(f"Service {service_name} not available")
+        url = f"{service['url']}{path}"
+        async with session.get(url, params=params) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise RuntimeError(f"{service_name} HTTP {resp.status}: {text}")
+            return await resp.json()
+
+    def _normalize_flowhub_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(task or {})
+        normalized.setdefault('data_source', 'flowhub')
+        normalized.setdefault('source', 'flowhub')
+        return normalized
+
+    def _normalize_job_task(self, service: str, job: Dict[str, Any]) -> Dict[str, Any]:
+        job_id = job.get('job_id') or job.get('id') or job.get('task_id') or ''
+        job_type = job.get('job_type') or job.get('type') or job.get('task_type') or 'job'
+        status = job.get('status') or job.get('state') or job.get('job_status') or 'unknown'
+        name = job.get('name') or job.get('job_name') or job.get('task_name') or f"{service}:{job_type}"
+        created_at = job.get('created_at') or job.get('started_at') or job.get('start_time')
+        updated_at = job.get('updated_at') or job.get('completed_at') or job.get('end_time')
+        success_count = job.get('success_count')
+        failed_count = job.get('failed_count')
+        if success_count is None:
+            success_count = 1 if status in ('succeeded', 'completed', 'success') else 0
+        if failed_count is None:
+            failed_count = 1 if status in ('failed', 'error') else 0
+        return {
+            'task_id': job_id,
+            'name': name,
+            'data_type': job_type,
+            'schedule_type': 'manual',
+            'schedule_value': None,
+            'status': status,
+            'enabled': True,
+            'run_count': job.get('run_count', 0),
+            'success_count': success_count,
+            'failed_count': failed_count,
+            'created_at': created_at,
+            'updated_at': updated_at,
+            'last_run_at': updated_at,
+            'next_run_at': None,
+            'data_source': service,
+            'source': service,
+            'raw': job
+        }
+
+    def _normalize_brain_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        task_id = task.get('task_id') or task.get('id') or ''
+        name = task.get('name') or task_id
+        enabled = task.get('enabled', True)
+        status = task.get('status') or ('disabled' if not enabled else 'idle')
+        return {
+            'task_id': task_id,
+            'name': name,
+            'data_type': task.get('data_type') or 'brain_task',
+            'schedule_type': 'cron',
+            'schedule_value': task.get('cron'),
+            'status': status,
+            'enabled': enabled,
+            'run_count': task.get('run_count', 0),
+            'success_count': task.get('success_count', 0),
+            'failed_count': task.get('failed_count', 0),
+            'created_at': task.get('created_at'),
+            'updated_at': task.get('updated_at'),
+            'last_run_at': task.get('last_run_at'),
+            'next_run_at': task.get('next_run_at'),
+            'data_source': 'brain',
+            'source': 'brain',
+            'raw': task
+        }
