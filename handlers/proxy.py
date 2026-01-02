@@ -25,24 +25,24 @@ HOP_BY_HOP_HEADERS = {
 class ProxyHandler(BaseHandler):
     """服务代理处理器"""
 
-    def _resolve_service(self, path: str) -> str | None:
+    def _resolve_service(self, path: str) -> tuple[str | None, str]:
         parts = [p for p in path.split('/') if p]
         if len(parts) < 3:
-            return None
+            return None, path
         scope = parts[2]
+        if scope == 'flowhub':
+            return 'flowhub', path.replace('/api/v1/flowhub', '/api/v1', 1)
         if scope in ('macro', 'market', 'theories'):
             return 'macro'
         if scope in ('analyze', 'backtest', 'strategy', 'realtime', 'quantum'):
             return 'execution'
         if scope in ('portfolio', 'portfolios'):
             return 'portfolio'
-        if scope in ('tasks', 'sources', 'jobs'):
-            return 'flowhub'
-        return None
+        return None, path
 
     async def proxy(self, request: web.Request) -> web.Response:
         """转发请求到目标服务"""
-        service_name = self._resolve_service(request.path)
+        service_name, rewritten_path = self._resolve_service(request.path)
         if not service_name:
             return self.error_response("不支持的代理路径", 404)
 
@@ -52,7 +52,11 @@ class ProxyHandler(BaseHandler):
             return self.error_response(f"服务未注册: {service_name}", 404)
 
         target_base = service['url'].rstrip('/')
-        target_url = f"{target_base}{request.path_qs}"
+        if rewritten_path != request.path:
+            target_path_qs = request.path_qs.replace(request.path, rewritten_path, 1)
+        else:
+            target_path_qs = request.path_qs
+        target_url = f"{target_base}{target_path_qs}"
 
         session = getattr(registry, '_session', None)
         if session is None:

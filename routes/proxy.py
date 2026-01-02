@@ -36,13 +36,9 @@ def setup_proxy_routes(app: web.Application, cors: CorsConfig = None):
         '/api/v1/portfolio/{tail:.*}',
         '/api/v1/portfolios',
         '/api/v1/portfolios/{tail:.*}',
-        # Flowhub
-        '/api/v1/tasks',
-        '/api/v1/tasks/{tail:.*}',
-        '/api/v1/sources',
-        '/api/v1/sources/{tail:.*}',
-        '/api/v1/jobs',
-        '/api/v1/jobs/{tail:.*}',
+        # Flowhub (统一使用 /api/v1/flowhub 前缀，避免与 brain 自身任务路由冲突)
+        '/api/v1/flowhub',
+        '/api/v1/flowhub/{tail:.*}',
     ]
 
     routes = []
