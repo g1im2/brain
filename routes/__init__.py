@@ -14,6 +14,7 @@ from .signals import setup_signal_routes
 from .dataflow import setup_dataflow_routes
 from .tasks import setup_task_routes
 from .monitoring import setup_monitoring_routes
+from .proxy import setup_proxy_routes
 
 
 def setup_routes(app: web.Application, cors: CorsConfig = None):
@@ -44,9 +45,11 @@ def setup_routes(app: web.Application, cors: CorsConfig = None):
     
     # 监控告警路由
     setup_monitoring_routes(app, cors)
+
+    # 统一代理路由（前端只对接 brain）
+    setup_proxy_routes(app, cors)
     
     # 静态文件路由（如果需要）
     # app.router.add_static('/', path='static', name='static')
-
 
 
