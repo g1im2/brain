@@ -26,7 +26,18 @@ def setup_dataflow_routes(app: web.Application, cors: CorsConfig = None):
     route = app.router.add_get('/api/v1/dataflow/status', dataflow_handler.get_status)
     if cors:
         cors.add(route)
-    
+
+    # 兼容前端：数据流列表与操作
+    route = app.router.add_get('/api/v1/dataflow', dataflow_handler.list_dataflows)
+    if cors:
+        cors.add(route)
+    route = app.router.add_post('/api/v1/dataflow/{flow_id}/{action}', dataflow_handler.control_dataflow)
+    if cors:
+        cors.add(route)
+    route = app.router.add_delete('/api/v1/dataflow/{flow_id}', dataflow_handler.delete_dataflow)
+    if cors:
+        cors.add(route)
+
     # 优化数据流
     route = app.router.add_post('/api/v1/dataflow/optimize', dataflow_handler.optimize)
     if cors:

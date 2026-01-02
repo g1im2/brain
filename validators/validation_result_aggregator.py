@@ -16,9 +16,14 @@ from dataclasses import dataclass, field
 import numpy as np
 import threading
 
-from ..models import ValidationResult, ValidationStatus
-from ..config import IntegrationConfig
-from ..exceptions import ValidationException
+try:
+    from ..models import ValidationResult, ValidationStatus
+    from ..config import IntegrationConfig
+    from ..exceptions import ValidationException
+except ImportError:
+    from models import ValidationResult, ValidationStatus
+    from config import IntegrationConfig
+    from exceptions import ValidationException
 
 logger = logging.getLogger(__name__)
 

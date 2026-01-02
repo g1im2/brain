@@ -9,8 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH=/app
 ENV TZ=Asia/Shanghai
 
-# 安装系统依赖
-RUN apt-get update && apt-get install -y --fix-missing curl && rm -rf /var/lib/apt/lists/*
+# 安装系统依赖（当前无额外系统依赖）
 
 # 构建阶段
 FROM base AS builder
@@ -71,7 +70,7 @@ USER brain
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8088/health || exit 1
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8088/health')"]
 
 # 暴露端口
 EXPOSE 8088

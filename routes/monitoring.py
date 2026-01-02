@@ -31,9 +31,15 @@ def setup_monitoring_routes(app: web.Application, cors: CorsConfig = None):
     route = app.router.add_get('/api/v1/monitoring/alerts', monitoring_handler.get_alerts)
     if cors:
         cors.add(route)
-    
+
     # 确认告警
     route = app.router.add_post('/api/v1/monitoring/alerts/ack', monitoring_handler.ack_alert)
+    if cors:
+        cors.add(route)
+    route = app.router.add_post('/api/v1/monitoring/alerts/{alert_id}/ack', monitoring_handler.ack_alert_by_id)
+    if cors:
+        cors.add(route)
+    route = app.router.add_post('/api/v1/monitoring/alerts/{alert_id}/silence', monitoring_handler.silence_alert)
     if cors:
         cors.add(route)
     

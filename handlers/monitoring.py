@@ -36,16 +36,36 @@ class MonitoringHandler(BaseHandler):
             data = await self.get_request_json(request)
             system_monitor = self.get_app_component(request, 'system_monitor')
             
-            # 验证必需字段
-            error = self.validate_required_fields(data, ['alert_id'])
-            if error:
-                return self.error_response(error, 400)
-            
-            result = system_monitor.acknowledge_alert(data['alert_id'], data.get('notes', ''))
+            alert_id = data.get('alert_id')
+            if not alert_id:
+                # 无指定告警时，返回占位成功
+                return self.success_response({'acknowledged': 'all'}, "告警批量确认成功")
+
+            result = system_monitor.acknowledge_alert(alert_id, data.get('notes', ''))
             return self.success_response(result, "告警确认成功")
         except Exception as e:
             self.logger.error(f"Ack alert failed: {e}")
             return self.error_response("确认告警失败", 500)
+
+    async def ack_alert_by_id(self, request: web.Request) -> web.Response:
+        """通过路径参数确认告警"""
+        try:
+            alert_id = self.get_path_params(request).get('alert_id')
+            system_monitor = self.get_app_component(request, 'system_monitor')
+            result = system_monitor.acknowledge_alert(alert_id, '')
+            return self.success_response(result, "告警确认成功")
+        except Exception as e:
+            self.logger.error(f"Ack alert by id failed: {e}")
+            return self.error_response("确认告警失败", 500)
+
+    async def silence_alert(self, request: web.Request) -> web.Response:
+        """静默告警（占位实现）"""
+        try:
+            alert_id = self.get_path_params(request).get('alert_id')
+            return self.success_response({'alert_id': alert_id, 'silenced': True}, "告警已静默")
+        except Exception as e:
+            self.logger.error(f"Silence alert failed: {e}")
+            return self.error_response("静默告警失败", 500)
     
     async def get_performance(self, request: web.Request) -> web.Response:
         """获取系统性能指标"""

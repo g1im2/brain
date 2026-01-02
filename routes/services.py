@@ -47,6 +47,20 @@ def setup_service_routes(app: web.Application, cors: CorsConfig = None):
     if cors:
         cors.add(route)
 
+    # 兼容前端操作（占位实现）
+    route = app.router.add_post('/api/v1/services/{service}/start', service_handler.start_service)
+    if cors:
+        cors.add(route)
+    route = app.router.add_post('/api/v1/services/{service}/stop', service_handler.stop_service)
+    if cors:
+        cors.add(route)
+    route = app.router.add_post('/api/v1/services/{service}/restart', service_handler.restart_service)
+    if cors:
+        cors.add(route)
+    route = app.router.add_post('/api/v1/services/deploy', service_handler.deploy_service)
+    if cors:
+        cors.add(route)
+
     # Execution 历史分析查询代理（GET /api/v1/analyze/history）
     route = app.router.add_get('/api/v1/services/execution/analyze/history', service_handler.get_execution_analysis_history)
     if cors:
@@ -67,4 +81,3 @@ def setup_service_routes(app: web.Application, cors: CorsConfig = None):
     route = app.router.add_get('/api/v1/services/execution/callback/last', service_handler.get_last_execution_callback)
     if cors:
         cors.add(route)
-

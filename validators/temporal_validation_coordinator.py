@@ -12,12 +12,20 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 import threading
 
-from ..interfaces import ITemporalValidationCoordinator
-from ..models import ValidationResult, ValidationStatus
-from ..config import IntegrationConfig
-from ..exceptions import ValidationException, ValidationTimeoutException, ValidationSynchronizationException
-from ..adapters.strategy_adapter import StrategyAdapter
-from ..adapters.execution_request_mapper import ExecutionRequestMapper
+try:
+    from ..interfaces import ITemporalValidationCoordinator
+    from ..models import ValidationResult, ValidationStatus
+    from ..config import IntegrationConfig
+    from ..exceptions import ValidationException, ValidationTimeoutException, ValidationSynchronizationException
+    from ..adapters.strategy_adapter import StrategyAdapter
+    from ..adapters.execution_request_mapper import ExecutionRequestMapper
+except ImportError:
+    from interfaces import ITemporalValidationCoordinator
+    from models import ValidationResult, ValidationStatus
+    from config import IntegrationConfig
+    from exceptions import ValidationException, ValidationTimeoutException, ValidationSynchronizationException
+    from adapters.strategy_adapter import StrategyAdapter
+    from adapters.execution_request_mapper import ExecutionRequestMapper
 
 logger = logging.getLogger(__name__)
 

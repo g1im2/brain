@@ -6,10 +6,12 @@ Integration Service 应用工厂
 
 import logging
 import asyncio
+import inspect
 from aiohttp import web
 from aiohttp_cors import setup as cors_setup, ResourceOptions
 
 from asyncron import start_scheduler
+import redis.asyncio as redis
 from config import IntegrationConfig
 from container import setup_container
 from interfaces import ISystemCoordinator, ISignalRouter, IDataFlowManager
@@ -87,6 +89,19 @@ async def init_components(app: web.Application, config: IntegrationConfig):
 
         # 服务注册表
         app['service_registry'] = ServiceRegistry(config)
+
+        # Redis客户端（供调度器/分析触发使用）
+        try:
+            app['redis'] = redis.from_url(
+                config.redis.url,
+                encoding='utf-8',
+                decode_responses=True
+            )
+            await app['redis'].ping()
+            logger.info(f"Redis client initialized: {config.redis.url}")
+        except Exception as redis_err:
+            logger.warning(f"Failed to initialize Redis client: {redis_err}")
+            app['redis'] = None
 
         # 核心组件（通过DI解析）
         app['coordinator'] = await app['container'].resolve(ISystemCoordinator)
@@ -240,6 +255,13 @@ async def cleanup_handler(app: web.Application):
         # 停止服务注册表
         if 'service_registry' in app:
             await app['service_registry'].stop()
+
+        # 关闭Redis客户端
+        redis_client = app.get('redis')
+        if redis_client:
+            close_result = redis_client.close()
+            if inspect.isawaitable(close_result):
+                await close_result
 
         logger.info("All components stopped successfully")
 

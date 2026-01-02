@@ -70,3 +70,32 @@ class DataFlowHandler(BaseHandler):
         except Exception as e:
             self.logger.error(f"Trigger sync failed: {e}")
             return self.error_response("触发数据同步失败", 500)
+
+    async def list_dataflows(self, request: web.Request) -> web.Response:
+        """兼容前端：获取数据流列表（占位实现）"""
+        try:
+            data_flow_manager = self.get_app_component(request, 'data_flow_manager')
+            status = await data_flow_manager.get_data_flow_status()
+            return self.success_response(status)
+        except Exception as e:
+            self.logger.error(f"List dataflows failed: {e}")
+            return self.error_response("获取数据流列表失败", 500)
+
+    async def control_dataflow(self, request: web.Request) -> web.Response:
+        """兼容前端：控制数据流（占位实现）"""
+        try:
+            flow_id = self.get_path_params(request).get('flow_id')
+            action = self.get_path_params(request).get('action')
+            return self.success_response({'flow_id': flow_id, 'action': action}, "数据流操作已受理")
+        except Exception as e:
+            self.logger.error(f"Control dataflow failed: {e}")
+            return self.error_response("数据流操作失败", 500)
+
+    async def delete_dataflow(self, request: web.Request) -> web.Response:
+        """兼容前端：删除数据流（占位实现）"""
+        try:
+            flow_id = self.get_path_params(request).get('flow_id')
+            return self.success_response({'flow_id': flow_id}, "数据流删除已受理")
+        except Exception as e:
+            self.logger.error(f"Delete dataflow failed: {e}")
+            return self.error_response("数据流删除失败", 500)

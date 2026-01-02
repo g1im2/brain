@@ -64,6 +64,42 @@ class ServiceHandler(BaseHandler):
             self.logger.error(f"Get service config failed: {e}")
             return self.error_response("获取服务配置失败", 500)
 
+    async def start_service(self, request: web.Request) -> web.Response:
+        """启动服务（占位实现）"""
+        try:
+            service_name = self.get_path_params(request)['service']
+            return self.success_response({'service': service_name, 'action': 'start'}, "服务启动请求已受理")
+        except Exception as e:
+            self.logger.error(f"Start service failed: {e}")
+            return self.error_response("服务启动失败", 500)
+
+    async def stop_service(self, request: web.Request) -> web.Response:
+        """停止服务（占位实现）"""
+        try:
+            service_name = self.get_path_params(request)['service']
+            return self.success_response({'service': service_name, 'action': 'stop'}, "服务停止请求已受理")
+        except Exception as e:
+            self.logger.error(f"Stop service failed: {e}")
+            return self.error_response("服务停止失败", 500)
+
+    async def restart_service(self, request: web.Request) -> web.Response:
+        """重启服务（占位实现）"""
+        try:
+            service_name = self.get_path_params(request)['service']
+            return self.success_response({'service': service_name, 'action': 'restart'}, "服务重启请求已受理")
+        except Exception as e:
+            self.logger.error(f"Restart service failed: {e}")
+            return self.error_response("服务重启失败", 500)
+
+    async def deploy_service(self, request: web.Request) -> web.Response:
+        """部署服务（占位实现）"""
+        try:
+            payload = await self.get_request_json(request)
+            return self.success_response({'deployment': payload}, "部署请求已受理")
+        except Exception as e:
+            self.logger.error(f"Deploy service failed: {e}")
+            return self.error_response("服务部署失败", 500)
+
     async def get_execution_analysis_history(self, request: web.Request) -> web.Response:
         """代理查询 Execution 的分析历史（GET /api/v1/analyze/history，支持分页/排序/过滤）"""
         try:

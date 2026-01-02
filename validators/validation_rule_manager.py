@@ -16,8 +16,12 @@ from enum import Enum
 from dataclasses import dataclass, field
 import threading
 
-from ..config import IntegrationConfig
-from ..exceptions import ValidationException
+try:
+    from ..config import IntegrationConfig
+    from ..exceptions import ValidationException
+except ImportError:
+    from config import IntegrationConfig
+    from exceptions import ValidationException
 
 logger = logging.getLogger(__name__)
 

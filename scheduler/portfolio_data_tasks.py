@@ -29,9 +29,9 @@ from asyncron import (
 
 from config import IntegrationConfig
 try:
-    from ..adapters import FlowhubAdapter
+    from ..adapters.flowhub_adapter import FlowhubAdapter
 except Exception:
-    from adapters import FlowhubAdapter
+    from adapters.flowhub_adapter import FlowhubAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ class PortfolioDataTaskScheduler:
         @self._planer.task(url='/portfolio_adj_factors_fetch', plans=adj_factors_plan)
         async def portfolio_adj_factors_fetch(context: TaskContext):
             """复权因子数据抓取任务（增量追加型）"""
-            await self._trigger_adj_factors_fetch()
+            await self._trigger_adj_factors_fetch(context.get_task_id(), context.get_task_name())
 
         # ==================== 全量更新型数据任务 ====================
         
@@ -90,7 +90,7 @@ class PortfolioDataTaskScheduler:
             # 只在周日执行
             today = date.today()
             if today.weekday() == 6:  # 周日
-                await self._trigger_stock_basic_fetch()
+                await self._trigger_stock_basic_fetch(context.get_task_id(), context.get_task_name())
 
         # 行业分类数据抓取任务 (每月第一个周日19:30)
         industry_classification_plan = PlansAt(
@@ -104,7 +104,7 @@ class PortfolioDataTaskScheduler:
             # 只在每月第一个周日执行
             today = date.today()
             if today.weekday() == 6 and today.day <= 7:  # 每月第一个周日
-                await self._trigger_industry_classification_fetch()
+                await self._trigger_industry_classification_fetch(context.get_task_id(), context.get_task_name())
 
         # ==================== 时点快照型数据任务 ====================
         
@@ -122,7 +122,7 @@ class PortfolioDataTaskScheduler:
             if (today.month in [3, 6, 9, 12] and 
                 today.weekday() == 4 and  # 周五
                 15 <= today.day <= 21):   # 第三个周五大概在15-21日之间
-                await self._trigger_index_components_fetch()
+                await self._trigger_index_components_fetch(context.get_task_id(), context.get_task_name())
 
         # ==================== 数据质量检查任务 ====================
         
@@ -135,7 +135,7 @@ class PortfolioDataTaskScheduler:
         @self._planer.task(url='/portfolio_data_quality_check', plans=data_quality_check_plan)
         async def portfolio_data_quality_check(context: TaskContext):
             """Portfolio数据质量检查任务"""
-            await self._trigger_data_quality_check()
+            await self._trigger_data_quality_check(context.get_task_id(), context.get_task_name())
 
         # ==================== 手动触发支持 ====================
 
@@ -150,7 +150,7 @@ class PortfolioDataTaskScheduler:
 
     # ==================== 任务实现方法 ====================
 
-    async def _trigger_adj_factors_fetch(self):
+    async def _trigger_adj_factors_fetch(self, task_id: str | None = None, task_name: str | None = None):
         """触发复权因子数据抓取（增量追加型）"""
         try:
             logger.info("Triggering portfolio adj factors fetch...")
@@ -169,20 +169,21 @@ class PortfolioDataTaskScheduler:
                 logger.info(f"Portfolio adj factors fetch job created: {job_id}")
                 
                 self._record_task_execution(
-                    "portfolio_adj_factors_fetch",
+                    task_name or "portfolio_adj_factors_fetch",
                     "completed",
-                    f"Adj factors fetch job created: {job_id}"
+                    f"Adj factors fetch job created: {job_id}",
+                    task_id
                 )
                 
             else:
                 logger.warning("FlowhubAdapter not available, skipping adj factors fetch")
-                self._record_task_execution("portfolio_adj_factors_fetch", "skipped", "FlowhubAdapter not available")
+                self._record_task_execution(task_name or "portfolio_adj_factors_fetch", "skipped", "FlowhubAdapter not available", task_id)
                 
         except Exception as e:
             logger.error(f"Portfolio adj factors fetch failed: {e}")
-            self._record_task_execution("portfolio_adj_factors_fetch", "failed", str(e))
+            self._record_task_execution(task_name or "portfolio_adj_factors_fetch", "failed", str(e), task_id)
 
-    async def _trigger_stock_basic_fetch(self):
+    async def _trigger_stock_basic_fetch(self, task_id: str | None = None, task_name: str | None = None):
         """触发股票基础信息抓取（全量更新型）"""
         try:
             logger.info("Triggering portfolio stock basic fetch...")
@@ -201,20 +202,21 @@ class PortfolioDataTaskScheduler:
                 logger.info(f"Portfolio stock basic fetch job created: {job_id}")
                 
                 self._record_task_execution(
-                    "portfolio_stock_basic_fetch",
+                    task_name or "portfolio_stock_basic_fetch",
                     "completed",
-                    f"Stock basic fetch job created: {job_id}"
+                    f"Stock basic fetch job created: {job_id}",
+                    task_id
                 )
                 
             else:
                 logger.warning("FlowhubAdapter not available, skipping stock basic fetch")
-                self._record_task_execution("portfolio_stock_basic_fetch", "skipped", "FlowhubAdapter not available")
+                self._record_task_execution(task_name or "portfolio_stock_basic_fetch", "skipped", "FlowhubAdapter not available", task_id)
                 
         except Exception as e:
             logger.error(f"Portfolio stock basic fetch failed: {e}")
-            self._record_task_execution("portfolio_stock_basic_fetch", "failed", str(e))
+            self._record_task_execution(task_name or "portfolio_stock_basic_fetch", "failed", str(e), task_id)
 
-    async def _trigger_industry_classification_fetch(self):
+    async def _trigger_industry_classification_fetch(self, task_id: str | None = None, task_name: str | None = None):
         """触发行业分类数据抓取（全量更新型）"""
         try:
             logger.info("Triggering portfolio industry classification fetch...")
@@ -233,20 +235,21 @@ class PortfolioDataTaskScheduler:
                 logger.info(f"Portfolio industry classification fetch job created: {job_id}")
                 
                 self._record_task_execution(
-                    "portfolio_industry_classification_fetch",
+                    task_name or "portfolio_industry_classification_fetch",
                     "completed",
-                    f"Industry classification fetch job created: {job_id}"
+                    f"Industry classification fetch job created: {job_id}",
+                    task_id
                 )
                 
             else:
                 logger.warning("FlowhubAdapter not available, skipping industry classification fetch")
-                self._record_task_execution("portfolio_industry_classification_fetch", "skipped", "FlowhubAdapter not available")
+                self._record_task_execution(task_name or "portfolio_industry_classification_fetch", "skipped", "FlowhubAdapter not available", task_id)
                 
         except Exception as e:
             logger.error(f"Portfolio industry classification fetch failed: {e}")
-            self._record_task_execution("portfolio_industry_classification_fetch", "failed", str(e))
+            self._record_task_execution(task_name or "portfolio_industry_classification_fetch", "failed", str(e), task_id)
 
-    async def _trigger_index_components_fetch(self):
+    async def _trigger_index_components_fetch(self, task_id: str | None = None, task_name: str | None = None):
         """触发指数成分股权重抓取（时点快照型）"""
         try:
             logger.info("Triggering portfolio index components fetch...")
@@ -277,22 +280,23 @@ class PortfolioDataTaskScheduler:
                 
                 if job_ids:
                     self._record_task_execution(
-                        "portfolio_index_components_fetch",
+                        task_name or "portfolio_index_components_fetch",
                         "completed",
-                        f"Created {len(job_ids)} index components jobs: {[jid for _, jid in job_ids]}"
+                        f"Created {len(job_ids)} index components jobs: {[jid for _, jid in job_ids]}",
+                        task_id
                     )
                 else:
-                    self._record_task_execution("portfolio_index_components_fetch", "failed", "No jobs created")
+                    self._record_task_execution(task_name or "portfolio_index_components_fetch", "failed", "No jobs created", task_id)
                 
             else:
                 logger.warning("FlowhubAdapter not available, skipping index components fetch")
-                self._record_task_execution("portfolio_index_components_fetch", "skipped", "FlowhubAdapter not available")
+                self._record_task_execution(task_name or "portfolio_index_components_fetch", "skipped", "FlowhubAdapter not available", task_id)
                 
         except Exception as e:
             logger.error(f"Portfolio index components fetch failed: {e}")
-            self._record_task_execution("portfolio_index_components_fetch", "failed", str(e))
+            self._record_task_execution(task_name or "portfolio_index_components_fetch", "failed", str(e), task_id)
 
-    async def _trigger_data_quality_check(self):
+    async def _trigger_data_quality_check(self, task_id: str | None = None, task_name: str | None = None):
         """触发Portfolio数据质量检查"""
         try:
             logger.info("Triggering portfolio data quality check...")
@@ -302,35 +306,37 @@ class PortfolioDataTaskScheduler:
             
             # 简化实现：记录检查完成
             self._record_task_execution(
-                "portfolio_data_quality_check",
+                task_name or "portfolio_data_quality_check",
                 "completed",
-                "Data quality check completed"
+                "Data quality check completed",
+                task_id
             )
             
         except Exception as e:
             logger.error(f"Portfolio data quality check failed: {e}")
-            self._record_task_execution("portfolio_data_quality_check", "failed", str(e))
+            self._record_task_execution(task_name or "portfolio_data_quality_check", "failed", str(e), task_id)
 
-    async def _trigger_full_data_rebuild(self):
+    async def _trigger_full_data_rebuild(self, task_id: str | None = None, task_name: str | None = None):
         """触发Portfolio全量数据重建"""
         try:
             logger.info("Triggering portfolio full data rebuild...")
             
             # 按顺序执行所有数据抓取任务
-            await self._trigger_stock_basic_fetch()
-            await self._trigger_industry_classification_fetch()
-            await self._trigger_index_components_fetch()
-            await self._trigger_adj_factors_fetch()
+            await self._trigger_stock_basic_fetch(task_id, task_name)
+            await self._trigger_industry_classification_fetch(task_id, task_name)
+            await self._trigger_index_components_fetch(task_id, task_name)
+            await self._trigger_adj_factors_fetch(task_id, task_name)
             
             self._record_task_execution(
-                "portfolio_full_data_rebuild",
+                task_name or "portfolio_full_data_rebuild",
                 "completed",
-                "Full data rebuild completed"
+                "Full data rebuild completed",
+                task_id
             )
             
         except Exception as e:
             logger.error(f"Portfolio full data rebuild failed: {e}")
-            self._record_task_execution("portfolio_full_data_rebuild", "failed", str(e))
+            self._record_task_execution(task_name or "portfolio_full_data_rebuild", "failed", str(e), task_id)
 
     async def _get_flowhub_adapter(self):
         """获取FlowhubAdapter实例"""
@@ -349,16 +355,15 @@ class PortfolioDataTaskScheduler:
             logger.error(f"Failed to get FlowhubAdapter: {e}")
             return None
 
-    def _record_task_execution(self, task_name: str, status: str, message: str):
+    def _record_task_execution(self, task_name: str, status: str, message: str, task_id: str | None = None):
         """记录任务执行历史"""
-        execution_record = {
-            'task_name': task_name,
-            'status': status,
-            'message': message,
-            'timestamp': datetime.now().isoformat()
-        }
-
         logger.info(f"Portfolio task execution recorded: {task_name} - {status}")
+
+        if self.app and 'scheduler' in self.app:
+            try:
+                self.app['scheduler'].record_task_execution(task_name, status, message, task_id)
+            except Exception as e:
+                logger.warning(f"Failed to record task history to scheduler: {e}")
 
         # 如果任务成功完成，通知分析触发调度器
         if status == 'completed':

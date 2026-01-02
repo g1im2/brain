@@ -26,9 +26,9 @@ from asyncron import (
 )
 
 try:
-    from ..adapters import FlowhubAdapter
+    from ..adapters.flowhub_adapter import FlowhubAdapter
 except Exception:
-    from adapters import FlowhubAdapter
+    from adapters.flowhub_adapter import FlowhubAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,12 @@ class MacroDataTaskScheduler:
         @self._planer.task(url='/interest_rate_data_fetch', plans=interest_rate_plan)
         async def interest_rate_data_fetch(context: TaskContext):
             """利率收益率数据抓取任务"""
-            await self._fetch_single_macro_data('interest-rate-data', 'daily')
+            await self._fetch_single_macro_data(
+                'interest-rate-data',
+                'daily',
+                context.get_task_id(),
+                context.get_task_name()
+            )
         
         # 股票指数数据 (每日 18:35)
         stock_index_plan = PlansAt(
@@ -79,7 +84,12 @@ class MacroDataTaskScheduler:
         @self._planer.task(url='/stock_index_data_fetch', plans=stock_index_plan)
         async def stock_index_data_fetch(context: TaskContext):
             """股票指数数据抓取任务"""
-            await self._fetch_single_macro_data('stock-index-data', 'daily')
+            await self._fetch_single_macro_data(
+                'stock-index-data',
+                'daily',
+                context.get_task_id(),
+                context.get_task_name()
+            )
         
         # 市场资金流数据 (每日 18:40)
         market_flow_plan = PlansAt(
@@ -90,7 +100,12 @@ class MacroDataTaskScheduler:
         @self._planer.task(url='/market_flow_data_fetch', plans=market_flow_plan)
         async def market_flow_data_fetch(context: TaskContext):
             """市场资金流数据抓取任务"""
-            await self._fetch_single_macro_data('market-flow-data', 'daily')
+            await self._fetch_single_macro_data(
+                'market-flow-data',
+                'daily',
+                context.get_task_id(),
+                context.get_task_name()
+            )
         
         # 商品价格数据 (每日 18:45)
         commodity_price_plan = PlansAt(
@@ -101,7 +116,12 @@ class MacroDataTaskScheduler:
         @self._planer.task(url='/commodity_price_data_fetch', plans=commodity_price_plan)
         async def commodity_price_data_fetch(context: TaskContext):
             """商品价格数据抓取任务"""
-            await self._fetch_single_macro_data('commodity-price-data', 'daily')
+            await self._fetch_single_macro_data(
+                'commodity-price-data',
+                'daily',
+                context.get_task_id(),
+                context.get_task_name()
+            )
         
         # ==================== 月度宏观数据任务 ====================
         
@@ -116,7 +136,12 @@ class MacroDataTaskScheduler:
             """价格指数数据抓取任务"""
             today = date.today()
             if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data('price-index-data', 'monthly')
+                await self._fetch_single_macro_data(
+                    'price-index-data',
+                    'monthly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
         
         # 货币供应量数据 (每月1日 19:05)
         money_supply_plan = PlansAt(
@@ -129,7 +154,12 @@ class MacroDataTaskScheduler:
             """货币供应量数据抓取任务"""
             today = date.today()
             if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data('money-supply-data', 'monthly')
+                await self._fetch_single_macro_data(
+                    'money-supply-data',
+                    'monthly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
         
         # 社会融资数据 (每月1日 19:10)
         social_financing_plan = PlansAt(
@@ -142,7 +172,12 @@ class MacroDataTaskScheduler:
             """社会融资数据抓取任务"""
             today = date.today()
             if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data('social-financing-data', 'monthly')
+                await self._fetch_single_macro_data(
+                    'social-financing-data',
+                    'monthly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
         
         # 投资统计数据 (每月1日 19:15)
         investment_plan = PlansAt(
@@ -155,7 +190,12 @@ class MacroDataTaskScheduler:
             """投资统计数据抓取任务"""
             today = date.today()
             if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data('investment-data', 'monthly')
+                await self._fetch_single_macro_data(
+                    'investment-data',
+                    'monthly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
         
         # 工业生产数据 (每月1日 19:20)
         industrial_plan = PlansAt(
@@ -168,7 +208,12 @@ class MacroDataTaskScheduler:
             """工业生产数据抓取任务"""
             today = date.today()
             if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data('industrial-data', 'monthly')
+                await self._fetch_single_macro_data(
+                    'industrial-data',
+                    'monthly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
         
         # 景气指数数据 (每月1日 19:25)
         sentiment_index_plan = PlansAt(
@@ -181,7 +226,12 @@ class MacroDataTaskScheduler:
             """景气指数数据抓取任务"""
             today = date.today()
             if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data('sentiment-index-data', 'monthly')
+                await self._fetch_single_macro_data(
+                    'sentiment-index-data',
+                    'monthly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
         
         # 库存周期数据 (每月1日 19:30)
         inventory_cycle_plan = PlansAt(
@@ -194,7 +244,12 @@ class MacroDataTaskScheduler:
             """库存周期数据抓取任务"""
             today = date.today()
             if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data('inventory-cycle-data', 'monthly')
+                await self._fetch_single_macro_data(
+                    'inventory-cycle-data',
+                    'monthly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
         
         # ==================== 季度宏观数据任务 ====================
         
@@ -209,7 +264,12 @@ class MacroDataTaskScheduler:
             """GDP数据抓取任务"""
             today = date.today()
             if today.day == 15 and today.month in [1, 4, 7, 10]:  # 季度第一个月15日执行
-                await self._fetch_single_macro_data('gdp-data', 'quarterly')
+                await self._fetch_single_macro_data(
+                    'gdp-data',
+                    'quarterly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
         
         # ==================== 年度宏观数据任务 ====================
         
@@ -224,7 +284,12 @@ class MacroDataTaskScheduler:
             """技术创新数据抓取任务"""
             today = date.today()
             if today.month == 1 and today.day == 15:  # 每年1月15日执行
-                await self._fetch_single_macro_data('innovation-data', 'yearly')
+                await self._fetch_single_macro_data(
+                    'innovation-data',
+                    'yearly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
         
         # 人口统计数据 (每年1月15日 20:05)
         demographic_plan = PlansAt(
@@ -237,11 +302,22 @@ class MacroDataTaskScheduler:
             """人口统计数据抓取任务"""
             today = date.today()
             if today.month == 1 and today.day == 15:  # 每年1月15日执行
-                await self._fetch_single_macro_data('demographic-data', 'yearly')
+                await self._fetch_single_macro_data(
+                    'demographic-data',
+                    'yearly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
         
         logger.info("All 14 macro data tasks setup completed")
     
-    async def _fetch_single_macro_data(self, data_type: str, frequency: str):
+    async def _fetch_single_macro_data(
+        self,
+        data_type: str,
+        frequency: str,
+        task_id: str | None = None,
+        task_name: str | None = None
+    ):
         """抓取单个宏观数据类型
 
         Args:
@@ -269,16 +345,41 @@ class MacroDataTaskScheduler:
                     # 通知分析触发调度器任务已完成
                     await self._notify_task_completed(f"{data_type.replace('-', '_')}_fetch")
 
+                    self._record_task_execution(
+                        task_name or f"{data_type.replace('-', '_')}_fetch",
+                        "completed",
+                        f"{data_type} job created: {job_id}",
+                        task_id
+                    )
+
                     return {'status': 'success', 'job_id': job_id}
                 else:
                     logger.error(f"Failed to create job for {data_type}")
+                    self._record_task_execution(
+                        task_name or f"{data_type.replace('-', '_')}_fetch",
+                        "failed",
+                        "No job ID returned",
+                        task_id
+                    )
                     return {'status': 'failed', 'error': 'No job ID returned'}
             else:
                 logger.warning(f"FlowhubAdapter not available for {data_type}")
+                self._record_task_execution(
+                    task_name or f"{data_type.replace('-', '_')}_fetch",
+                    "skipped",
+                    "FlowhubAdapter not available",
+                    task_id
+                )
                 return {'status': 'skipped', 'error': 'FlowhubAdapter not available'}
 
         except Exception as e:
             logger.error(f"{data_type} fetch failed: {e}")
+            self._record_task_execution(
+                task_name or f"{data_type.replace('-', '_')}_fetch",
+                "failed",
+                str(e),
+                task_id
+            )
             return {'status': 'failed', 'error': str(e)}
     
     async def _get_flowhub_adapter(self):
@@ -328,7 +429,12 @@ class MacroDataTaskScheduler:
             today = date.today()
             if today.weekday() == 5:  # 周六 (0=周一, 5=周六)
                 logger.info("开始执行复权因子数据抓取任务")
-                await self._fetch_auxiliary_data('adj-factors', 'weekly')
+                await self._fetch_auxiliary_data(
+                    'adj-factors',
+                    'weekly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
 
         # ==================== 指数成分股数据任务 ====================
 
@@ -344,7 +450,12 @@ class MacroDataTaskScheduler:
             today = date.today()
             if today.day == 1:  # 每月1日执行
                 logger.info("开始执行指数成分股数据抓取任务")
-                await self._fetch_auxiliary_data('index-components', 'monthly')
+                await self._fetch_auxiliary_data(
+                    'index-components',
+                    'monthly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
 
         # ==================== 板块数据任务 ====================
 
@@ -358,7 +469,12 @@ class MacroDataTaskScheduler:
         async def industry_board_data_fetch(context: TaskContext):
             """行业板块数据抓取任务"""
             logger.info("开始执行行业板块数据抓取任务")
-            await self._fetch_auxiliary_data('industry-board', 'weekly')
+            await self._fetch_auxiliary_data(
+                'industry-board',
+                'weekly',
+                context.get_task_id(),
+                context.get_task_name()
+            )
 
         # 概念板块数据 (每周日 21:30)
         concept_board_plan = PlansEvery(
@@ -370,7 +486,12 @@ class MacroDataTaskScheduler:
         async def concept_board_data_fetch(context: TaskContext):
             """概念板块数据抓取任务"""
             logger.info("开始执行概念板块数据抓取任务")
-            await self._fetch_auxiliary_data('concept-board', 'weekly')
+            await self._fetch_auxiliary_data(
+                'concept-board',
+                'weekly',
+                context.get_task_id(),
+                context.get_task_name()
+            )
 
         # 行业板块成分股数据 (每周日 22:00)
         industry_board_stocks_plan = PlansEvery(
@@ -382,7 +503,12 @@ class MacroDataTaskScheduler:
         async def industry_board_stocks_data_fetch(context: TaskContext):
             """行业板块成分股数据抓取任务"""
             logger.info("开始执行行业板块成分股数据抓取任务")
-            await self._fetch_auxiliary_data('industry-board-stocks', 'weekly')
+            await self._fetch_auxiliary_data(
+                'industry-board-stocks',
+                'weekly',
+                context.get_task_id(),
+                context.get_task_name()
+            )
 
         # 概念板块成分股数据 (每周日 22:30)
         concept_board_stocks_plan = PlansEvery(
@@ -394,9 +520,20 @@ class MacroDataTaskScheduler:
         async def concept_board_stocks_data_fetch(context: TaskContext):
             """概念板块成分股数据抓取任务"""
             logger.info("开始执行概念板块成分股数据抓取任务")
-            await self._fetch_auxiliary_data('concept-board-stocks', 'weekly')
+            await self._fetch_auxiliary_data(
+                'concept-board-stocks',
+                'weekly',
+                context.get_task_id(),
+                context.get_task_name()
+            )
 
-    async def _fetch_auxiliary_data(self, data_type: str, frequency: str):
+    async def _fetch_auxiliary_data(
+        self,
+        data_type: str,
+        frequency: str,
+        task_id: str | None = None,
+        task_name: str | None = None
+    ):
         """抓取辅助数据的通用方法"""
         try:
             logger.info(f"开始抓取{data_type}数据 (频率: {frequency})")
@@ -475,17 +612,52 @@ class MacroDataTaskScheduler:
                     # 通知分析触发调度器任务已完成
                     await self._notify_task_completed(f"{data_type.replace('-', '_')}_fetch")
 
+                    self._record_task_execution(
+                        task_name or f"{data_type.replace('-', '_')}_fetch",
+                        "completed",
+                        f"{data_type} job created: {job_id}",
+                        task_id
+                    )
+
                     return {'status': 'success', 'job_id': job_id}
                 else:
                     logger.error(f"Failed to create job for {data_type}")
+                    self._record_task_execution(
+                        task_name or f"{data_type.replace('-', '_')}_fetch",
+                        "failed",
+                        "No job ID returned",
+                        task_id
+                    )
                     return {'status': 'failed', 'error': 'No job ID returned'}
             else:
                 logger.warning(f"FlowhubAdapter not available for {data_type}")
+                self._record_task_execution(
+                    task_name or f"{data_type.replace('-', '_')}_fetch",
+                    "skipped",
+                    "FlowhubAdapter not available",
+                    task_id
+                )
                 return {'status': 'skipped', 'error': 'FlowhubAdapter not available'}
 
         except Exception as e:
             logger.error(f"{data_type} fetch failed: {e}")
+            self._record_task_execution(
+                task_name or f"{data_type.replace('-', '_')}_fetch",
+                "failed",
+                str(e),
+                task_id
+            )
             return {'status': 'failed', 'error': str(e)}
+
+    def _record_task_execution(self, task_name: str, status: str, message: str, task_id: str | None = None):
+        """记录任务执行历史"""
+        logger.info(f"Macro task execution recorded: {task_name} - {status}")
+
+        if self.app and 'scheduler' in self.app:
+            try:
+                self.app['scheduler'].record_task_execution(task_name, status, message, task_id)
+            except Exception as e:
+                logger.warning(f"Failed to record task history to scheduler: {e}")
 
     def get_planer(self):
         """获取asyncron planer"""

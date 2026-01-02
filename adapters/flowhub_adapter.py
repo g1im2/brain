@@ -68,6 +68,46 @@ class FlowhubAdapter(ISystemAdapter):
 
         logger.info("FlowhubAdapter initialized with HTTP client integration")
 
+    async def list_tasks(self, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
+        """获取 Flowhub 任务列表（任务调度系统）"""
+        if not self._is_connected:
+            raise AdapterException("FlowhubAdapter", "Not connected to Flowhub service")
+        response = await self._http_client.get('/api/v1/tasks', params={'limit': limit, 'offset': offset})
+        payload = response.get('data') or response
+        tasks = payload.get('tasks') if isinstance(payload, dict) else None
+        return tasks if isinstance(tasks, list) else []
+
+    async def create_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """创建 Flowhub 任务（任务调度系统）"""
+        if not self._is_connected:
+            raise AdapterException("FlowhubAdapter", "Not connected to Flowhub service")
+        response = await self._http_client.post('/api/v1/tasks', data=payload)
+        return response.get('data') or response
+
+    async def run_task(self, task_id: str) -> Dict[str, Any]:
+        """触发 Flowhub 任务运行（返回 job_id）"""
+        if not self._is_connected:
+            raise AdapterException("FlowhubAdapter", "Not connected to Flowhub service")
+        response = await self._http_client.post(f'/api/v1/tasks/{task_id}/run')
+        return response.get('data') or response
+
+    async def ensure_task(self, name: str, data_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """确保 Flowhub 中存在指定名称的任务"""
+        tasks = await self.list_tasks()
+        for task in tasks:
+            if task.get('name') == name:
+                return task
+
+        payload = {
+            'name': name,
+            'data_type': data_type,
+            'params': params,
+            'schedule_type': 'manual',
+            'schedule_value': None,
+            'enabled': True
+        }
+        return await self.create_task(payload)
+
     async def connect_to_system(self) -> bool:
         """连接到Flowhub数据抓取服务
 

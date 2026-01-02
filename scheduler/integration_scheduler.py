@@ -16,6 +16,7 @@ from asyncron import (
     BluePrint,
     PlansAt,
     PlansEvery,
+    Timer,
     TimeUnit,
     TimeUnits,
     start_scheduler
@@ -27,7 +28,7 @@ from exceptions import AdapterException
 logger = logging.getLogger(__name__)
 
 try:
-    from adapters import FlowhubAdapter
+    from adapters.flowhub_adapter import FlowhubAdapter
 except Exception:
     FlowhubAdapter = None
 
@@ -122,6 +123,61 @@ class IntegrationScheduler:
         logger.info("Task blueprint created with default and custom tasks")
         return blueprint
 
+    def _custom_task_id(self, task_id: str) -> str:
+        """将自定义任务ID转换为调度器内部ID"""
+        return f"/custom/{task_id}"
+
+    def _strip_custom_prefix(self, scheduler_task_id: str) -> str:
+        """从调度器ID还原自定义任务ID"""
+        if scheduler_task_id.startswith("/custom/"):
+            return scheduler_task_id[len("/custom/"):]
+        return scheduler_task_id
+
+    def _calculate_time(self, time_str: str) -> datetime.time:
+        """解析 HH:MM[:SS] 到 time 对象"""
+        time_values = time_str.split(':')
+        if len(time_values) == 3:
+            hour, minute, second = time_values
+        else:
+            hour, minute = time_values
+            second = 0
+        return datetime.time(hour=int(hour), minute=int(minute), second=int(second))
+
+    def _sync_tasks_from_plans(self) -> None:
+        """将新增的plan同步为实际任务（避免重复创建）"""
+        scheduler = Scheduler.get_instance()
+        task_man = getattr(scheduler, "_Scheduler__task_man", None)
+        if task_man is None:
+            return
+
+        existing_names = {task.get_task_name() for task in scheduler.list_tasks()}
+        for url, task_opts in scheduler.tasks_opts_repo.items():
+            if url in existing_names:
+                continue
+            plans = task_opts.get('plans')
+            if isinstance(plans, PlansAt):
+                for time_unit, moment in plans.list_plans():
+                    at_moment = self._calculate_time(moment).isoformat()
+                    plan_timer = Timer(**task_opts).set_unit(time_unit).at(at_moment)
+                    task_man.add_task(task_opts['method'], url, {}, plan_timer)
+            elif isinstance(plans, PlansEvery):
+                for interval, units in plans.list_plans():
+                    plan_timer = Timer(**task_opts).every(interval).set_units(units)
+                    task_man.add_task(task_opts['method'], url, {}, plan_timer)
+            else:
+                task_man.add_task(task_opts['method'], url, {})
+
+    def _refresh_task_id_mapping(self) -> None:
+        """刷新自定义任务与调度器任务ID的映射"""
+        scheduler = Scheduler.get_instance()
+        for task in scheduler.list_tasks():
+            task_name = task.get_task_name()
+            if not task_name.startswith("/custom/"):
+                continue
+            task_id = task_name[len("/custom/"):]
+            if task_id in self._managed_tasks:
+                self._managed_tasks[task_id]['scheduler_task_id'] = task.get_task_id()
+
     async def stop(self):
         """停止调度器"""
         if not self._is_running:
@@ -189,11 +245,15 @@ class IntegrationScheduler:
         try:
             self._blueprint = self._create_task_blueprint()
             if self._is_running:
-                Scheduler.get_instance().add_plan(self._blueprint)
+                scheduler = Scheduler.get_instance()
+                scheduler.add_plan(self._blueprint)
+                self._sync_tasks_from_plans()
+                self._refresh_task_id_mapping()
                 logger.info("Scheduler updated with new blueprint (hot-add)")
             else:
                 start_scheduler([self._blueprint])
                 self._is_running = True
+                self._refresh_task_id_mapping()
                 logger.info("Scheduler started with blueprint")
         except Exception as e:
             logger.error(f"Failed to apply scheduler update: {e}")
@@ -261,14 +321,60 @@ class IntegrationScheduler:
         try:
             scheduler = Scheduler.get_instance()
             tasks = scheduler.list_tasks()
-            return [
-                {
-                    'name': task.get_task_name(),
-                    'task_id': task.get_task_id(),
-                    'status': 'active' if self._is_running else 'stopped'
-                }
-                for task in tasks
-            ]
+            results = []
+            seen_custom = set()
+            for task in tasks:
+                scheduler_task_id = task.get_task_id()
+                task_name = task.get_task_name()
+                if task_name.startswith("/custom/"):
+                    task_id = task_name[len("/custom/"):]
+                    managed = self._managed_tasks.get(task_id)
+                    if managed:
+                        managed['scheduler_task_id'] = scheduler_task_id
+                        seen_custom.add(task_id)
+                        results.append({
+                            'name': managed.get('name') or task_name,
+                            'task_id': task_id,
+                            'status': 'active' if self._is_running else 'stopped',
+                            'cron': managed.get('cron'),
+                            'function': managed.get('function'),
+                            'enabled': managed.get('enabled', True),
+                            'source': 'custom'
+                        })
+                        continue
+                if task_name.startswith("/custom/"):
+                    results.append({
+                        'name': task_name,
+                        'task_id': scheduler_task_id,
+                        'status': 'active' if self._is_running else 'stopped',
+                        'cron': None,
+                        'function': None,
+                        'enabled': True,
+                        'source': 'custom'
+                    })
+                else:
+                    results.append({
+                        'name': task_name,
+                        'task_id': scheduler_task_id,
+                        'status': 'active' if self._is_running else 'stopped',
+                        'cron': None,
+                        'function': None,
+                        'enabled': True,
+                        'source': 'system'
+                    })
+            for task_id, managed in self._managed_tasks.items():
+                if task_id in seen_custom:
+                    continue
+                results.append({
+                    'name': managed.get('name') or self._custom_task_id(task_id),
+                    'task_id': task_id,
+                    'status': 'active' if self._is_running else 'stopped',
+                    'cron': managed.get('cron'),
+                    'function': managed.get('function'),
+                    'enabled': managed.get('enabled', True),
+                    'source': 'custom'
+                })
+            return results
         except Exception as e:
             logger.error(f"Failed to get tasks: {e}")
             return []
@@ -276,6 +382,18 @@ class IntegrationScheduler:
     async def get_task(self, task_id: str) -> Dict[str, Any]:
         """获取任务详情"""
         try:
+            if task_id in self._managed_tasks:
+                managed = self._managed_tasks[task_id]
+                return {
+                    'task_id': task_id,
+                    'name': managed.get('name'),
+                    'status': 'active' if self._is_running else 'stopped',
+                    'cron': managed.get('cron'),
+                    'function': managed.get('function'),
+                    'enabled': managed.get('enabled', True),
+                    'payload': managed.get('payload'),
+                    'source': 'custom'
+                }
             scheduler = Scheduler.get_instance()
             task = scheduler.get_task(task_id)
             return {
@@ -290,7 +408,12 @@ class IntegrationScheduler:
         """手动触发任务"""
         try:
             scheduler = Scheduler.get_instance()
-            scheduler.start_task(task_id)
+            if task_id in self._managed_tasks:
+                task_data = self._managed_tasks.get(task_id, {})
+                background = asyncio.create_task(self._execute_custom_task(task_data))
+                background.add_done_callback(self._log_background_error)
+            else:
+                scheduler.start_task(task_id)
             return {
                 'task_id': task_id,
                 'status': 'triggered',
@@ -299,6 +422,15 @@ class IntegrationScheduler:
         except Exception as e:
             logger.error(f"Failed to trigger task {task_id}: {e}")
             raise AdapterException("IntegrationScheduler", f"Task trigger failed: {e}")
+
+    @staticmethod
+    def _log_background_error(task: asyncio.Task) -> None:
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc:
+            logger.error(f"Background task execution failed: {exc}")
 
     # 默认任务实现
     async def _trigger_daily_data_fetch(self, context):
@@ -317,13 +449,18 @@ class IntegrationScheduler:
             flowhub_adapter = await self._get_flowhub_adapter()
 
             if flowhub_adapter:
-                # 创建每日数据抓取任务
-                job_result = await flowhub_adapter.create_daily_data_fetch_job(
-                    symbols=None,  # None表示抓取所有股票
-                    incremental=True  # 使用增量更新
+                task = await flowhub_adapter.ensure_task(
+                    name="brain_daily_data_fetch",
+                    data_type="batch_daily_ohlc",
+                    params={
+                        "data_type": "batch_daily_ohlc",
+                        "symbols": None,
+                        "incremental": True,
+                        "force_update": False
+                    }
                 )
-
-                job_id = job_result.get('job_id')
+                run_result = await flowhub_adapter.run_task(task.get('task_id'))
+                job_id = run_result.get('job_id')
                 logger.info(f"Daily data fetch job created: {job_id}")
 
                 # 等待任务完成（最多30分钟）
@@ -331,7 +468,7 @@ class IntegrationScheduler:
                 result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
 
                 job_status = result.get('status')
-                if job_status == 'completed':
+                if self._is_success_status(job_status):
                     logger.info(f"Daily data fetch job {job_id} completed successfully")
 
                     # 记录任务执行成功
@@ -376,13 +513,17 @@ class IntegrationScheduler:
             flowhub_adapter = await self._get_flowhub_adapter()
 
             if flowhub_adapter:
-                # 创建指数日线数据抓取任务
-                job_result = await flowhub_adapter.create_index_daily_data_job(
-                    index_codes=None,  # None表示主要指数
-                    update_mode='incremental'
+                task = await flowhub_adapter.ensure_task(
+                    name="brain_daily_index_fetch",
+                    data_type="index_daily_data",
+                    params={
+                        "data_type": "index_daily_data",
+                        "index_codes": None,
+                        "update_mode": "incremental"
+                    }
                 )
-
-                job_id = job_result.get('job_id')
+                run_result = await flowhub_adapter.run_task(task.get('task_id'))
+                job_id = run_result.get('job_id')
                 logger.info(f"Index daily data fetch job created: {job_id}")
 
                 # 等待任务完成（最多30分钟）
@@ -390,7 +531,7 @@ class IntegrationScheduler:
                 result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
 
                 job_status = result.get('status')
-                if job_status == 'completed':
+                if self._is_success_status(job_status):
                     logger.info(f"Index daily data fetch job {job_id} completed successfully")
                     self._record_task_execution(
                         "daily_index_fetch",
@@ -428,19 +569,30 @@ class IntegrationScheduler:
             flowhub_adapter = await self._get_flowhub_adapter()
 
             if flowhub_adapter:
-                # 创建行业板块数据抓取任务
-                industry_job_result = await flowhub_adapter.create_industry_board_job(
-                    source='ths',
-                    update_mode='incremental'
+                industry_task = await flowhub_adapter.ensure_task(
+                    name="brain_industry_board_fetch",
+                    data_type="industry_board",
+                    params={
+                        "data_type": "industry_board",
+                        "source": "ths",
+                        "update_mode": "incremental"
+                    }
                 )
+                industry_job_result = await flowhub_adapter.run_task(industry_task.get('task_id'))
                 industry_job_id = industry_job_result.get('job_id')
                 logger.info(f"Industry board data fetch job created: {industry_job_id}")
 
                 # 创建概念板块数据抓取任务
-                concept_job_result = await flowhub_adapter.create_concept_board_job(
-                    source='ths',
-                    update_mode='incremental'
+                concept_task = await flowhub_adapter.ensure_task(
+                    name="brain_concept_board_fetch",
+                    data_type="concept_board",
+                    params={
+                        "data_type": "concept_board",
+                        "source": "ths",
+                        "update_mode": "incremental"
+                    }
                 )
+                concept_job_result = await flowhub_adapter.run_task(concept_task.get('task_id'))
                 concept_job_id = concept_job_result.get('job_id')
                 logger.info(f"Concept board data fetch job created: {concept_job_id}")
 
@@ -456,7 +608,7 @@ class IntegrationScheduler:
                 industry_status = industry_result.get('status')
                 concept_status = concept_result.get('status')
 
-                if industry_status == 'completed' and concept_status == 'completed':
+                if self._is_success_status(industry_status) and self._is_success_status(concept_status):
                     logger.info(f"Board data fetch jobs completed successfully")
                     self._record_task_execution(
                         "daily_board_fetch",
@@ -576,11 +728,36 @@ class IntegrationScheduler:
     async def _execute_custom_task(self, task_data: Dict[str, Any]):
         """执行自定义任务"""
         try:
-            logger.info(f"Executing custom task: {task_data.get('name', 'unknown')}")
+            task_name = task_data.get('name', 'custom')
+            func = task_data.get('function')
+            payload = task_data.get('payload') or {}
 
-            # 这里应该根据task_data中的function字段执行相应的功能
-            # 暂时记录日志
-            self._record_task_execution(task_data.get('name', 'custom'), "completed", "Custom task executed", task_data.get('task_id'))
+            logger.info(f"Executing custom task: {task_name} func={func}")
+
+            if func == 'full_analysis_cycle':
+                await self._trigger_analysis_cycle()
+            elif func == 'macro_analysis':
+                analysis_trigger = self.app.get('analysis_trigger') if self.app else None
+                if analysis_trigger:
+                    await analysis_trigger._trigger_macro_analysis()
+                else:
+                    raise AdapterException("IntegrationScheduler", "AnalysisTriggerScheduler not available")
+            elif func == 'stock_batch_analysis':
+                analysis_trigger = self.app.get('analysis_trigger') if self.app else None
+                if analysis_trigger:
+                    await analysis_trigger._trigger_stock_batch_analysis()
+                else:
+                    raise AdapterException("IntegrationScheduler", "AnalysisTriggerScheduler not available")
+            elif func == 'daily_data_fetch':
+                await self._trigger_daily_data_fetch(None)
+            elif func == 'daily_index_fetch':
+                await self._trigger_daily_index_fetch(None)
+            elif func == 'daily_board_fetch':
+                await self._trigger_daily_board_fetch(None)
+            else:
+                raise AdapterException("IntegrationScheduler", f"Unsupported custom task function: {func}")
+
+            self._record_task_execution(task_name, "completed", "Custom task executed", task_data.get('task_id'))
 
         except Exception as e:
             logger.error(f"Custom task execution failed: {e}")
@@ -605,8 +782,12 @@ class IntegrationScheduler:
         logger.info(f"Task execution recorded: {task_name} - {status}")
 
         # 如果任务成功完成，通知分析触发调度器
-        if status == 'completed':
+        if self._is_success_status(status):
             asyncio.create_task(self._notify_task_completion(task_name))
+
+    def record_task_execution(self, task_name: str, status: str, message: str, task_id: Optional[str] = None):
+        """对外暴露的任务执行记录入口（供其他调度器调用）"""
+        self._record_task_execution(task_name, status, message, task_id)
 
     async def _notify_task_completion(self, task_name: str):
         """通知分析触发调度器任务已完成
@@ -637,3 +818,7 @@ class IntegrationScheduler:
             'limit': limit,
             'offset': offset
         }
+
+    @staticmethod
+    def _is_success_status(status: Optional[str]) -> bool:
+        return status in {"completed", "succeeded"}
