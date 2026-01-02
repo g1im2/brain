@@ -21,6 +21,14 @@ HOP_BY_HOP_HEADERS = {
     'host',
 }
 
+CORS_HEADERS = {
+    'access-control-allow-origin',
+    'access-control-allow-methods',
+    'access-control-allow-headers',
+    'access-control-expose-headers',
+    'access-control-max-age',
+}
+
 
 class ProxyHandler(BaseHandler):
     """服务代理处理器"""
@@ -77,7 +85,9 @@ class ProxyHandler(BaseHandler):
             ) as resp:
                 body = await resp.read()
                 response_headers = {
-                    k: v for k, v in resp.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS
+                    k: v
+                    for k, v in resp.headers.items()
+                    if k.lower() not in HOP_BY_HOP_HEADERS and k.lower() not in CORS_HEADERS
                 }
                 return web.Response(status=resp.status, headers=response_headers, body=body)
         except Exception as e:

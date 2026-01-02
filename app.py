@@ -56,6 +56,7 @@ async def create_app(config: IntegrationConfig) -> web.Application:
             allow_methods="*"
         )
     })
+    app['cors_enabled'] = True
 
     # 设置中间件
     setup_middleware(app)

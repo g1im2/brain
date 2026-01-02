@@ -284,8 +284,9 @@ def setup_middleware(app: web.Application):
     # 4. 安全头
     app.middlewares.append(security_middleware)
     
-    # 5. CORS处理
-    app.middlewares.append(cors_middleware)
+    # 5. CORS处理（aiohttp_cors 已统一处理时跳过）
+    if not app.get('cors_enabled'):
+        app.middlewares.append(cors_middleware)
     
     # 6. 限流（可选，根据需要启用）
     config = app.get('config')
