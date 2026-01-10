@@ -68,10 +68,13 @@ class FlowhubAdapter(ISystemAdapter):
 
         logger.info("FlowhubAdapter initialized with HTTP client integration")
 
-    async def list_tasks(self, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
+    async def list_tasks(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取 Flowhub 任务列表（任务调度系统）"""
         if not self._is_connected:
             raise AdapterException("FlowhubAdapter", "Not connected to Flowhub service")
+        # Flowhub 限制 limit 在 1..100，避免 400
+        limit = max(1, min(int(limit or 100), 100))
+        offset = max(int(offset or 0), 0)
         response = await self._http_client.get('/api/v1/tasks', params={'limit': limit, 'offset': offset})
         payload = response.get('data') or response
         tasks = payload.get('tasks') if isinstance(payload, dict) else None
@@ -96,6 +99,21 @@ class FlowhubAdapter(ISystemAdapter):
         tasks = await self.list_tasks()
         for task in tasks:
             if task.get('name') == name:
+                current_params = task.get('params') if isinstance(task.get('params'), dict) else {}
+                current_data_type = task.get('data_type')
+                needs_update = (current_data_type != data_type) or (current_params != (params or {}))
+                if needs_update:
+                    payload = {
+                        'name': name,
+                        'data_type': data_type,
+                        'params': params or {},
+                        'schedule_type': task.get('schedule_type', 'manual'),
+                        'schedule_value': task.get('schedule_value'),
+                        'enabled': task.get('enabled', True),
+                        'allow_overlap': task.get('allow_overlap', False)
+                    }
+                    response = await self._http_client.put(f"/api/v1/tasks/{task.get('task_id')}", data=payload)
+                    return response.get('data') or response
                 return task
 
         payload = {
@@ -320,8 +338,25 @@ class FlowhubAdapter(ISystemAdapter):
             logger.error(f"Failed to get job result for {job_id}: {e}")
             raise AdapterException("FlowhubAdapter", f"Get job result failed: {e}")
 
+    async def list_jobs(self, status: str = None, limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
+        """获取任务列表"""
+        try:
+            if not self._is_connected:
+                raise AdapterException("FlowhubAdapter", "Not connected to Flowhub service")
+
+            params = {'limit': limit, 'offset': offset}
+            if status:
+                params['status'] = status
+            response = await self._http_client.get('/api/v1/jobs', params=params)
+            jobs = response.get('jobs') if isinstance(response, dict) else None
+            return jobs if isinstance(jobs, list) else []
+        except Exception as e:
+            logger.error(f"Failed to list jobs: {e}")
+            raise AdapterException("FlowhubAdapter", f"List jobs failed: {e}")
+
     async def wait_for_job_completion(self, job_id: str, timeout: int = 172800,
-                                    check_interval: int = 30) -> Dict[str, Any]:
+                                    check_interval: int = 30,
+                                    max_status_failures: int = 5) -> Dict[str, Any]:
         """等待任务完成
 
         Args:
@@ -337,16 +372,33 @@ class FlowhubAdapter(ISystemAdapter):
 
             start_time = datetime.now()
 
+            status_failures = 0
             while True:
                 # 检查任务状态
-                status_response = await self.get_job_status(job_id)
-                status = status_response.get('status')
+                try:
+                    status_response = await self.get_job_status(job_id)
+                    status = status_response.get('status')
+                    status_failures = 0
+                except AdapterException as e:
+                    logger.warning(f"Get job status failed for {job_id}, retrying: {e}")
+                    status_failures += 1
+                    if status_failures >= max_status_failures:
+                        raise AdapterException(
+                            "FlowhubAdapter",
+                            f"Job {job_id} status unavailable after {status_failures} attempts"
+                        )
+                    await asyncio.sleep(min(check_interval, 10))
+                    status_response = None
+                    status = None
 
                 if status in ['succeeded', 'failed']:
                     # 任务完成，获取结果
                     result = await self.get_job_result(job_id)
                     logger.info(f"Job {job_id} completed with status: {status}")
                     return result
+                if status in ['cancelled', 'canceled']:
+                    logger.warning(f"Job {job_id} was cancelled")
+                    return status_response
 
                 # 检查超时
                 elapsed = (datetime.now() - start_time).total_seconds()

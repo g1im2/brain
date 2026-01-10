@@ -4,7 +4,9 @@ Execution服务适配器
 负责与Execution服务（股票技术分析服务）的通信
 """
 
+import asyncio
 import logging
+import time
 from typing import Dict, Any, List, Optional
 
 from config import IntegrationConfig
@@ -99,6 +101,24 @@ class ExecutionAdapter:
         except Exception as e:
             logger.error(f"Failed to list execution jobs: {e}")
             raise
+
+    async def wait_for_job_completion(
+        self,
+        job_id: str,
+        timeout: int = 43200,
+        poll_interval: int = 15
+    ) -> Dict[str, Any]:
+        """等待执行任务完成"""
+        end_time = time.time() + timeout
+        while time.time() < end_time:
+            job = await self.get_job_status(job_id)
+            status = (job.get('status') or '').lower()
+            if status in {'completed', 'succeeded'}:
+                return job
+            if status in {'failed', 'cancelled', 'canceled'}:
+                raise RuntimeError(f"Execution job {job_id} failed with status={status}")
+            await asyncio.sleep(poll_interval)
+        raise TimeoutError(f"Execution job {job_id} timeout after {timeout}s")
     
     async def get_analysis_result(self, task_id: str) -> Dict[str, Any]:
         """获取分析结果

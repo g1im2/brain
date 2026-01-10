@@ -4,7 +4,9 @@
 负责与宏观战略系统的HTTP接口适配和通信管理。
 """
 
+import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -248,6 +250,24 @@ class MacroAdapter(ISystemAdapter):
         except Exception as e:
             logger.error(f"Failed to list macro jobs: {e}")
             raise
+
+    async def wait_for_job_completion(
+        self,
+        job_id: str,
+        timeout: int = 21600,
+        poll_interval: int = 15
+    ) -> Dict[str, Any]:
+        """等待宏观分析任务完成"""
+        end_time = time.time() + timeout
+        while time.time() < end_time:
+            job = await self.get_job_status(job_id)
+            status = (job.get('status') or '').lower()
+            if status in {'completed', 'succeeded'}:
+                return job
+            if status in {'failed', 'cancelled', 'canceled'}:
+                raise RuntimeError(f"Macro job {job_id} failed with status={status}")
+            await asyncio.sleep(poll_interval)
+        raise TimeoutError(f"Macro job {job_id} timeout after {timeout}s")
 
     def get_connection_statistics(self) -> Dict[str, Any]:
         """获取连接统计信息"""

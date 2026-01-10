@@ -43,7 +43,7 @@ class ProxyHandler(BaseHandler):
             return 'flowhub', path.replace('/api/v1/flowhub', '/api/v1', 1)
         if scope in ('macro', 'market', 'theories'):
             return 'macro', path
-        if scope in ('analyze', 'backtest', 'strategy', 'realtime', 'quantum'):
+        if scope in ('analyze', 'backtest', 'strategy', 'realtime', 'quantum', 'alpha'):
             return 'execution', path
         if scope in ('portfolio', 'portfolios'):
             return 'portfolio', path

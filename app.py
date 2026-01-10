@@ -222,6 +222,14 @@ async def startup_handler(app: web.Application):
         else:
             logger.warning("System startup coordination completed with warnings")
 
+        # 启动后校验当天数据抓取是否完成，必要时补抓
+        try:
+            if 'scheduler' in app:
+                asyncio.create_task(app['scheduler'].ensure_daily_data_fetched_today())
+                logger.info("Scheduled daily data fetch check on startup")
+        except Exception as e:
+            logger.warning(f"Failed to schedule daily data fetch check: {e}")
+
     except Exception as e:
         logger.error(f"Failed to start components: {e}")
         # 不再向上抛出异常，避免阻断服务整体启动（初始化任务已在上方调度）

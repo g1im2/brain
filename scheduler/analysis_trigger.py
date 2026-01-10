@@ -6,7 +6,8 @@
 
 import asyncio
 import logging
-from typing import Dict, Any, List, Set
+import os
+from typing import Dict, Any, List, Set, Optional
 from datetime import datetime
 
 from asyncron import (
@@ -34,40 +35,58 @@ class AnalysisTriggerScheduler:
         self._planer = create_planer()
         
         # 数据依赖映射：分析任务 -> 所需数据抓取任务
-        # 任务名称必须与各调度器中的实际任务名称一致
+        # required: 必需项；optional: 可选项
         self.analysis_dependencies = {
             'macro_analysis': {
-                # 季度数据
-                'gdp_data_fetch',
-                # 月度数据
-                'price_index_data_fetch',  # CPI/PPI
-                'money_supply_data_fetch',  # M0/M1/M2
-                'social_financing_data_fetch',
-                'investment_data_fetch',  # 固定资产投资
-                'industrial_data_fetch',  # 工业增加值
-                'sentiment_index_data_fetch',  # PMI
-                # 日度数据
-                'interest_rate_data_fetch',
-                'stock_index_data_fetch',
-                'market_flow_data_fetch',
-                'commodity_price_data_fetch'
+                'required': {
+                    # 季度数据
+                    'gdp_data_fetch',
+                    # 月度数据
+                    'price_index_data_fetch',  # CPI/PPI
+                    'money_supply_data_fetch',  # M0/M1/M2
+                    'social_financing_data_fetch',
+                    'investment_data_fetch',  # 固定资产投资
+                    'industrial_data_fetch',  # 工业增加值
+                    'sentiment_index_data_fetch',  # PMI
+                    # 日度数据
+                    'interest_rate_data_fetch',
+                    'stock_index_data_fetch',
+                    'market_flow_data_fetch',
+                    'commodity_price_data_fetch'
+                },
+                'optional': set()
             },
             'stock_batch_analysis': {
-                # 股票核心数据（必需）
-                'stock_basic_data_fetch',  # 股票基本信息
-                'stock_daily_data_fetch',  # 股票日K线数据
-                # 股票辅助数据（可选，但建议包含）
-                'stock_index_data_fetch',  # 股票指数
-                'industry_board_data_fetch',  # 行业板块
-                'concept_board_data_fetch'  # 概念板块
+                # 仅依赖核心日线数据即可触发
+                'required': {
+                    'stock_daily_data_fetch'
+                },
+                # 其他数据完成后不会阻塞触发
+                'optional': {
+                    'stock_basic_data_fetch',
+                    'stock_index_data_fetch',
+                    'industry_board_data_fetch',
+                    'concept_board_data_fetch'
+                }
             }
         }
         
         # 已完成的数据抓取任务（使用Redis存储）
         self.completed_tasks: Set[str] = set()
+
+        # 仅处理分析依赖相关的任务，避免被其他任务（如 system_health_check）误触发
+        self._relevant_tasks: Set[str] = set()
+        for deps in self.analysis_dependencies.values():
+            self._relevant_tasks.update(deps.get('required', set()))
+            self._relevant_tasks.update(deps.get('optional', set()))
         
         # 上次检查时间
         self.last_check_time: Dict[str, datetime] = {}
+
+        # 分析任务等待配置
+        self.analysis_poll_interval = 15
+        self.stock_analysis_timeout = 12 * 3600
+        self.macro_analysis_timeout = 6 * 3600
         
         self._setup_tasks()
         
@@ -112,24 +131,30 @@ class AnalysisTriggerScheduler:
         Args:
             task_name: 任务名称
         """
-        try:
-            # 添加到已完成任务集合
-            self.completed_tasks.add(task_name)
-            
-            # 同时存储到Redis（持久化）
-            redis = self.app.get('redis')
-            if redis:
+        if task_name not in self._relevant_tasks:
+            logger.debug(f"忽略非分析依赖任务: {task_name}")
+            return
+
+        # 添加到已完成任务集合
+        self.completed_tasks.add(task_name)
+
+        # 同时存储到Redis（持久化）
+        redis = self.app.get('redis')
+        if redis:
+            try:
                 await redis.sadd('completed_data_tasks', task_name)
                 # 设置过期时间为7天
                 await redis.expire('completed_data_tasks', 7 * 24 * 3600)
-            
-            logger.info(f"数据抓取任务已标记为完成: {task_name}")
-            
-            # 立即检查是否可以触发分析
+            except Exception as e:
+                logger.warning(f"持久化完成任务到Redis失败，将继续触发分析: {e}")
+
+        logger.info(f"数据抓取任务已标记为完成: {task_name}")
+
+        # 立即检查是否可以触发分析
+        try:
             await self._check_all_analysis_triggers()
-            
         except Exception as e:
-            logger.error(f"标记任务完成失败 {task_name}: {e}")
+            logger.error(f"标记任务完成后触发分析失败 {task_name}: {e}")
     
     async def _check_all_analysis_triggers(self):
         """检查所有分析任务的触发条件"""
@@ -144,7 +169,9 @@ class AnalysisTriggerScheduler:
         """
         try:
             # 获取所需的数据抓取任务
-            required_tasks = self.analysis_dependencies.get(analysis_name, set())
+            dependencies = self.analysis_dependencies.get(analysis_name, {})
+            required_tasks = set(dependencies.get('required', set()))
+            optional_tasks = set(dependencies.get('optional', set()))
             
             if not required_tasks:
                 logger.warning(f"未找到分析任务的依赖配置: {analysis_name}")
@@ -154,15 +181,21 @@ class AnalysisTriggerScheduler:
             if not self.completed_tasks:
                 await self._load_completed_tasks_from_redis()
             
-            # 检查所有依赖任务是否都已完成
-            missing_tasks = required_tasks - self.completed_tasks
-            
-            if missing_tasks:
+            # 检查必需依赖任务是否都已完成
+            missing_required = required_tasks - self.completed_tasks
+            missing_optional = optional_tasks - self.completed_tasks
+
+            if missing_required:
                 logger.info(
                     f"分析任务 {analysis_name} 的依赖未满足，"
-                    f"缺少: {', '.join(missing_tasks)}"
+                    f"缺少: {', '.join(missing_required)}"
                 )
                 return
+            if missing_optional:
+                logger.info(
+                    f"分析任务 {analysis_name} 可选依赖未满足，"
+                    f"将继续触发。缺少: {', '.join(missing_optional)}"
+                )
             
             # 检查是否在冷却期内（避免频繁触发）
             if not self._should_trigger(analysis_name):
@@ -237,11 +270,27 @@ class AnalysisTriggerScheduler:
             }
             
             result = await macro_adapter.trigger_macro_analysis(analysis_params)
-            if isinstance(result, dict) and result.get('job_id') and not result.get('job'):
-                result['job'] = await macro_adapter.get_job_status(result['job_id'])
-            logger.info(f"宏观分析任务已触发: {result}")
-            
+            job_id = None
+            if isinstance(result, dict):
+                job_id = result.get('job_id') or result.get('task_id')
+            if job_id:
+                job = await macro_adapter.wait_for_job_completion(
+                    job_id,
+                    timeout=self.macro_analysis_timeout,
+                    poll_interval=self.analysis_poll_interval
+                )
+                self._record_analysis_execution(
+                    "macro_analysis",
+                    "completed",
+                    f"Macro analysis job completed: {job_id}",
+                    job_id
+                )
+                logger.info(f"宏观分析任务完成: {job}")
+            else:
+                logger.warning(f"宏观分析触发未返回job_id: {result}")
+
         except Exception as e:
+            self._record_analysis_execution("macro_analysis", "failed", str(e))
             logger.error(f"触发宏观分析失败: {e}")
     
     async def _trigger_stock_batch_analysis(self):
@@ -260,22 +309,48 @@ class AnalysisTriggerScheduler:
                 logger.error("ExecutionAdapter未初始化")
                 return
 
+            parallel_limit = int(os.getenv("EXECUTION_ANALYSIS_PARALLEL_LIMIT", "2"))
+            parallel_limit = max(1, min(4, parallel_limit))
+
             # 调用批量分析API
             # 注意：不传入symbols参数，让Execution服务自动获取所有股票
             analysis_params = {
                 'analyzers': ['all'],  # 触发所有可用的分析器（livermore + multi_indicator）
                 'config': {
-                    'parallel_limit': 10,  # 并发限制
-                    'save_all_dates': True,  # 保存所有历史日期的分析结果
+                    'parallel_limit': parallel_limit,  # 并发限制
+                    'save_all_dates': False,  # 日常增量只保存最新结果
                     'cache_enabled': False  # 禁用缓存，确保使用最新数据
                 }
             }
 
             logger.info("触发股票批量分析（全量分析模式，所有分析器）")
             result = await execution_adapter.trigger_batch_analysis(analysis_params)
-            logger.info(f"股票批量分析任务已触发: {result}")
+            job_id = None
+            if isinstance(result, dict):
+                job_id = result.get('job_id') or result.get('task_id')
+            if job_id:
+                job = await execution_adapter.wait_for_job_completion(
+                    job_id,
+                    timeout=self.stock_analysis_timeout,
+                    poll_interval=self.analysis_poll_interval
+                )
+                self._record_analysis_execution(
+                    "stock_batch_analysis",
+                    "completed",
+                    f"Stock batch analysis completed: {job_id}",
+                    job_id
+                )
+                logger.info(f"股票批量分析任务完成: {job}")
+            else:
+                logger.warning(f"股票批量分析触发未返回job_id: {result}")
 
         except Exception as e:
+            self._record_analysis_execution("stock_batch_analysis", "failed", str(e))
             logger.error(f"触发股票批量分析失败: {e}", exc_info=True)
-    
 
+    def _record_analysis_execution(self, task_name: str, status: str, message: str, job_id: Optional[str] = None) -> None:
+        """记录分析任务执行结果到调度器历史"""
+        scheduler = self.app.get('scheduler')
+        if scheduler and hasattr(scheduler, 'record_task_execution'):
+            scheduler.record_task_execution(task_name, status, message, job_id)
+    

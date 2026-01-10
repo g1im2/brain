@@ -738,8 +738,7 @@ class WorkflowEngine:
 
         except Exception as e:
             logger.error(f"Strategy analysis task failed: {e}")
-            # 返回默认结果以保持工作流继续
-            return [{"symbol": "000001.SZ", "signal_type": "buy", "strength": 0.8, "source": "strategy_analysis_system", "error": str(e)}]
+            raise IntegrationException(f"Strategy analysis failed: {e}")
 
     async def _handle_backtest_validation(self, **kwargs) -> Dict[str, Any]:
         """处理回测验证任务"""

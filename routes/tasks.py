@@ -32,6 +32,11 @@ def setup_task_routes(app: web.Application, cors: CorsConfig = None):
     if cors:
         cors.add(route)
 
+    # 代理获取任务状态
+    route = app.router.add_get('/api/v1/jobs/{job_id}/status', task_handler.get_job_status)
+    if cors:
+        cors.add(route)
+
     # 创建定时任务
     route = app.router.add_post('/api/v1/tasks', task_handler.create_task)
     if cors:

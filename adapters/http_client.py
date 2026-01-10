@@ -257,6 +257,15 @@ class HttpClient:
                         error_text = await response.text()
                         raise AdapterException("HttpClient", f"Request failed: HTTP {response.status}, {error_text}")
 
+            except asyncio.TimeoutError as e:
+                if attempt < self.config.adapter.max_retries:
+                    self.logger.warning(f"Request timeout (attempt {attempt + 1}): {e}")
+                    await asyncio.sleep(self.config.adapter.retry_delay * (attempt + 1))
+                    continue
+                else:
+                    self._error_count += 1
+                    raise ConnectionException("HttpClient", self.service_name, f"Timeout: {e}")
+
             except aiohttp.ClientError as e:
                 if attempt < self.config.adapter.max_retries:
                     self.logger.warning(f"Request failed (attempt {attempt + 1}): {e}")

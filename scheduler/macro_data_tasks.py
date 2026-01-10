@@ -341,18 +341,33 @@ class MacroDataTaskScheduler:
                 job_id = job_result.get('job_id')
                 if job_id:
                     logger.info(f"{data_type} job created: {job_id}")
-
-                    # 通知分析触发调度器任务已完成
-                    await self._notify_task_completed(f"{data_type.replace('-', '_')}_fetch")
-
-                    self._record_task_execution(
-                        task_name or f"{data_type.replace('-', '_')}_fetch",
-                        "completed",
-                        f"{data_type} job created: {job_id}",
-                        task_id
-                    )
-
-                    return {'status': 'success', 'job_id': job_id}
+                    try:
+                        result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
+                        status = result.get('status')
+                        if self._is_success_status(status):
+                            await self._notify_task_completed(f"{data_type.replace('-', '_')}_fetch")
+                            self._record_task_execution(
+                                task_name or f"{data_type.replace('-', '_')}_fetch",
+                                "completed",
+                                f"{data_type} job completed: {job_id}",
+                                task_id
+                            )
+                            return {'status': 'success', 'job_id': job_id}
+                        self._record_task_execution(
+                            task_name or f"{data_type.replace('-', '_')}_fetch",
+                            "failed",
+                            f"{data_type} job failed: {job_id}",
+                            task_id
+                        )
+                        return {'status': 'failed', 'job_id': job_id}
+                    except Exception as wait_error:
+                        self._record_task_execution(
+                            task_name or f"{data_type.replace('-', '_')}_fetch",
+                            "failed",
+                            f"{data_type} job timeout or error: {wait_error}",
+                            task_id
+                        )
+                        return {'status': 'failed', 'job_id': job_id, 'error': str(wait_error)}
                 else:
                     logger.error(f"Failed to create job for {data_type}")
                     self._record_task_execution(
@@ -459,39 +474,43 @@ class MacroDataTaskScheduler:
 
         # ==================== 板块数据任务 ====================
 
-        # 行业板块数据 (每周日 21:00)
-        industry_board_plan = PlansEvery(
-            time_units=[TimeUnits.WEEKS],
-            every=[1]
+        # 行业板块数据（月度全量校验，每月1日 21:00）
+        industry_board_plan = PlansAt(
+            time_unit=[TimeUnit.DAY],
+            at=["21:00:00"]
         )
 
         @self._planer.task(url='/industry_board_data_fetch', plans=industry_board_plan)
         async def industry_board_data_fetch(context: TaskContext):
             """行业板块数据抓取任务"""
-            logger.info("开始执行行业板块数据抓取任务")
-            await self._fetch_auxiliary_data(
-                'industry-board',
-                'weekly',
-                context.get_task_id(),
-                context.get_task_name()
-            )
+            today = date.today()
+            if today.day == 1:
+                logger.info("开始执行行业板块数据抓取任务（月度全量校验）")
+                await self._fetch_auxiliary_data(
+                    'industry-board',
+                    'monthly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
 
-        # 概念板块数据 (每周日 21:30)
-        concept_board_plan = PlansEvery(
-            time_units=[TimeUnits.WEEKS],
-            every=[1]
+        # 概念板块数据（月度全量校验，每月1日 21:30）
+        concept_board_plan = PlansAt(
+            time_unit=[TimeUnit.DAY],
+            at=["21:30:00"]
         )
 
         @self._planer.task(url='/concept_board_data_fetch', plans=concept_board_plan)
         async def concept_board_data_fetch(context: TaskContext):
             """概念板块数据抓取任务"""
-            logger.info("开始执行概念板块数据抓取任务")
-            await self._fetch_auxiliary_data(
-                'concept-board',
-                'weekly',
-                context.get_task_id(),
-                context.get_task_name()
-            )
+            today = date.today()
+            if today.day == 1:
+                logger.info("开始执行概念板块数据抓取任务（月度全量校验）")
+                await self._fetch_auxiliary_data(
+                    'concept-board',
+                    'monthly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
 
         # 行业板块成分股数据 (每周日 22:00)
         industry_board_stocks_plan = PlansEvery(
@@ -526,6 +545,44 @@ class MacroDataTaskScheduler:
                 context.get_task_id(),
                 context.get_task_name()
             )
+
+        # ==================== 板块成分股月度全量校验任务 ====================
+
+        industry_board_stocks_full_plan = PlansAt(
+            time_unit=[TimeUnit.DAY],
+            at=["23:00:00"]
+        )
+
+        @self._planer.task(url='/industry_board_stocks_full_fetch', plans=industry_board_stocks_full_plan)
+        async def industry_board_stocks_full_fetch(context: TaskContext):
+            """行业板块成分股月度全量校验"""
+            today = date.today()
+            if today.day == 1:
+                logger.info("开始执行行业板块成分股数据抓取任务（月度全量校验）")
+                await self._fetch_auxiliary_data(
+                    'industry-board-stocks',
+                    'monthly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
+
+        concept_board_stocks_full_plan = PlansAt(
+            time_unit=[TimeUnit.DAY],
+            at=["23:30:00"]
+        )
+
+        @self._planer.task(url='/concept_board_stocks_full_fetch', plans=concept_board_stocks_full_plan)
+        async def concept_board_stocks_full_fetch(context: TaskContext):
+            """概念板块成分股月度全量校验"""
+            today = date.today()
+            if today.day == 1:
+                logger.info("开始执行概念板块成分股数据抓取任务（月度全量校验）")
+                await self._fetch_auxiliary_data(
+                    'concept-board-stocks',
+                    'monthly',
+                    context.get_task_id(),
+                    context.get_task_name()
+                )
 
     async def _fetch_auxiliary_data(
         self,
@@ -562,43 +619,47 @@ class MacroDataTaskScheduler:
                         index_codes=major_indices
                     )
                 elif data_type == 'industry-board':
-                    # 行业板块数据抓取 - 全量更新模式
+                    # 行业板块数据抓取 - 周期更新（周更增量，月度全量）
+                    update_mode = 'full_update' if frequency == 'monthly' else 'incremental'
                     job_result = await flowhub_adapter.send_request({
                         "method": "POST",
                         "endpoint": "/api/v1/jobs/industry-board",
                         "payload": {
                             "source": "ths",
-                            "update_mode": "full_update"
+                            "update_mode": update_mode
                         }
                     })
                 elif data_type == 'concept-board':
-                    # 概念板块数据抓取 - 全量更新模式
+                    # 概念板块数据抓取 - 周期更新（周更增量，月度全量）
+                    update_mode = 'full_update' if frequency == 'monthly' else 'incremental'
                     job_result = await flowhub_adapter.send_request({
                         "method": "POST",
                         "endpoint": "/api/v1/jobs/concept-board",
                         "payload": {
                             "source": "ths",
-                            "update_mode": "full_update"
+                            "update_mode": update_mode
                         }
                     })
                 elif data_type == 'industry-board-stocks':
-                    # 行业板块成分股数据抓取 - 全量更新模式
+                    # 行业板块成分股数据抓取 - 周期更新（周更增量，月度全量）
+                    update_mode = 'full_update' if frequency == 'monthly' else 'incremental'
                     job_result = await flowhub_adapter.send_request({
                         "method": "POST",
                         "endpoint": "/api/v1/jobs/industry-board-stocks",
                         "payload": {
                             "source": "ths",
-                            "update_mode": "full_update"
+                            "update_mode": update_mode
                         }
                     })
                 elif data_type == 'concept-board-stocks':
-                    # 概念板块成分股数据抓取 - 全量更新模式
+                    # 概念板块成分股数据抓取 - 周期更新（周更增量，月度全量）
+                    update_mode = 'full_update' if frequency == 'monthly' else 'incremental'
                     job_result = await flowhub_adapter.send_request({
                         "method": "POST",
                         "endpoint": "/api/v1/jobs/concept-board-stocks",
                         "payload": {
                             "source": "ths",
-                            "update_mode": "full_update"
+                            "update_mode": update_mode
                         }
                     })
                 else:
@@ -608,18 +669,33 @@ class MacroDataTaskScheduler:
                 job_id = job_result.get('job_id')
                 if job_id:
                     logger.info(f"{data_type} job created: {job_id}")
-
-                    # 通知分析触发调度器任务已完成
-                    await self._notify_task_completed(f"{data_type.replace('-', '_')}_fetch")
-
-                    self._record_task_execution(
-                        task_name or f"{data_type.replace('-', '_')}_fetch",
-                        "completed",
-                        f"{data_type} job created: {job_id}",
-                        task_id
-                    )
-
-                    return {'status': 'success', 'job_id': job_id}
+                    try:
+                        result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
+                        status = result.get('status')
+                        if self._is_success_status(status):
+                            await self._notify_task_completed(f"{data_type.replace('-', '_')}_fetch")
+                            self._record_task_execution(
+                                task_name or f"{data_type.replace('-', '_')}_fetch",
+                                "completed",
+                                f"{data_type} job completed: {job_id}",
+                                task_id
+                            )
+                            return {'status': 'success', 'job_id': job_id}
+                        self._record_task_execution(
+                            task_name or f"{data_type.replace('-', '_')}_fetch",
+                            "failed",
+                            f"{data_type} job failed: {job_id}",
+                            task_id
+                        )
+                        return {'status': 'failed', 'job_id': job_id}
+                    except Exception as wait_error:
+                        self._record_task_execution(
+                            task_name or f"{data_type.replace('-', '_')}_fetch",
+                            "failed",
+                            f"{data_type} job timeout or error: {wait_error}",
+                            task_id
+                        )
+                        return {'status': 'failed', 'job_id': job_id, 'error': str(wait_error)}
                 else:
                     logger.error(f"Failed to create job for {data_type}")
                     self._record_task_execution(
@@ -658,6 +734,10 @@ class MacroDataTaskScheduler:
                 self.app['scheduler'].record_task_execution(task_name, status, message, task_id)
             except Exception as e:
                 logger.warning(f"Failed to record task history to scheduler: {e}")
+
+    @staticmethod
+    def _is_success_status(status: str | None) -> bool:
+        return status in {"completed", "succeeded"}
 
     def get_planer(self):
         """获取asyncron planer"""

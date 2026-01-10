@@ -167,13 +167,30 @@ class PortfolioDataTaskScheduler:
                 
                 job_id = job_result.get('job_id')
                 logger.info(f"Portfolio adj factors fetch job created: {job_id}")
-                
-                self._record_task_execution(
-                    task_name or "portfolio_adj_factors_fetch",
-                    "completed",
-                    f"Adj factors fetch job created: {job_id}",
-                    task_id
-                )
+                try:
+                    result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
+                    status = result.get('status')
+                    if self._is_success_status(status):
+                        self._record_task_execution(
+                            task_name or "portfolio_adj_factors_fetch",
+                            "completed",
+                            f"Adj factors fetch job completed: {job_id}",
+                            task_id
+                        )
+                    else:
+                        self._record_task_execution(
+                            task_name or "portfolio_adj_factors_fetch",
+                            "failed",
+                            f"Adj factors fetch job failed: {job_id}",
+                            task_id
+                        )
+                except Exception as wait_error:
+                    self._record_task_execution(
+                        task_name or "portfolio_adj_factors_fetch",
+                        "failed",
+                        f"Adj factors fetch job timeout or error: {wait_error}",
+                        task_id
+                    )
                 
             else:
                 logger.warning("FlowhubAdapter not available, skipping adj factors fetch")
@@ -200,13 +217,30 @@ class PortfolioDataTaskScheduler:
                 
                 job_id = job_result.get('job_id')
                 logger.info(f"Portfolio stock basic fetch job created: {job_id}")
-                
-                self._record_task_execution(
-                    task_name or "portfolio_stock_basic_fetch",
-                    "completed",
-                    f"Stock basic fetch job created: {job_id}",
-                    task_id
-                )
+                try:
+                    result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
+                    status = result.get('status')
+                    if self._is_success_status(status):
+                        self._record_task_execution(
+                            task_name or "portfolio_stock_basic_fetch",
+                            "completed",
+                            f"Stock basic fetch job completed: {job_id}",
+                            task_id
+                        )
+                    else:
+                        self._record_task_execution(
+                            task_name or "portfolio_stock_basic_fetch",
+                            "failed",
+                            f"Stock basic fetch job failed: {job_id}",
+                            task_id
+                        )
+                except Exception as wait_error:
+                    self._record_task_execution(
+                        task_name or "portfolio_stock_basic_fetch",
+                        "failed",
+                        f"Stock basic fetch job timeout or error: {wait_error}",
+                        task_id
+                    )
                 
             else:
                 logger.warning("FlowhubAdapter not available, skipping stock basic fetch")
@@ -233,13 +267,30 @@ class PortfolioDataTaskScheduler:
                 
                 job_id = job_result.get('job_id')
                 logger.info(f"Portfolio industry classification fetch job created: {job_id}")
-                
-                self._record_task_execution(
-                    task_name or "portfolio_industry_classification_fetch",
-                    "completed",
-                    f"Industry classification fetch job created: {job_id}",
-                    task_id
-                )
+                try:
+                    result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
+                    status = result.get('status')
+                    if self._is_success_status(status):
+                        self._record_task_execution(
+                            task_name or "portfolio_industry_classification_fetch",
+                            "completed",
+                            f"Industry classification fetch job completed: {job_id}",
+                            task_id
+                        )
+                    else:
+                        self._record_task_execution(
+                            task_name or "portfolio_industry_classification_fetch",
+                            "failed",
+                            f"Industry classification fetch job failed: {job_id}",
+                            task_id
+                        )
+                except Exception as wait_error:
+                    self._record_task_execution(
+                        task_name or "portfolio_industry_classification_fetch",
+                        "failed",
+                        f"Industry classification fetch job timeout or error: {wait_error}",
+                        task_id
+                    )
                 
             else:
                 logger.warning("FlowhubAdapter not available, skipping industry classification fetch")
@@ -261,7 +312,7 @@ class PortfolioDataTaskScheduler:
                 major_indices = ['000300', '000905', '000852', '399006']  # 沪深300、中证500、中证1000、创业板指
                 
                 job_ids = []
-                
+
                 for index_code in major_indices:
                     try:
                         job_result = await flowhub_adapter.create_portfolio_data_job(
@@ -279,12 +330,33 @@ class PortfolioDataTaskScheduler:
                         logger.error(f"Failed to create index components job for {index_code}: {e}")
                 
                 if job_ids:
-                    self._record_task_execution(
-                        task_name or "portfolio_index_components_fetch",
-                        "completed",
-                        f"Created {len(job_ids)} index components jobs: {[jid for _, jid in job_ids]}",
-                        task_id
-                    )
+                    completed = []
+                    failed = []
+                    for index_code, job_id in job_ids:
+                        try:
+                            result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
+                            status = result.get('status')
+                            if self._is_success_status(status):
+                                completed.append(job_id)
+                            else:
+                                failed.append(job_id)
+                        except Exception as wait_error:
+                            logger.warning(f"Index components job {job_id} error: {wait_error}")
+                            failed.append(job_id)
+                    if failed:
+                        self._record_task_execution(
+                            task_name or "portfolio_index_components_fetch",
+                            "failed",
+                            f"Index components jobs failed: {failed}",
+                            task_id
+                        )
+                    else:
+                        self._record_task_execution(
+                            task_name or "portfolio_index_components_fetch",
+                            "completed",
+                            f"Index components jobs completed: {completed}",
+                            task_id
+                        )
                 else:
                     self._record_task_execution(task_name or "portfolio_index_components_fetch", "failed", "No jobs created", task_id)
                 
@@ -369,6 +441,10 @@ class PortfolioDataTaskScheduler:
         if status == 'completed':
             asyncio.create_task(self._notify_task_completion(task_name))
 
+    @staticmethod
+    def _is_success_status(status: str | None) -> bool:
+        return status in {"completed", "succeeded"}
+
     async def _notify_task_completion(self, task_name: str):
         """通知分析触发调度器任务已完成
 
@@ -378,8 +454,17 @@ class PortfolioDataTaskScheduler:
         try:
             if self.app and 'analysis_trigger' in self.app:
                 analysis_trigger = self.app['analysis_trigger']
-                await analysis_trigger.mark_task_completed(task_name)
-                logger.info(f"Notified analysis trigger: {task_name} completed")
+                task_mapping = {
+                    'portfolio_stock_basic_fetch': 'stock_basic_data_fetch'
+                }
+                tasks_to_notify = [task_name]
+                mapped_task = task_mapping.get(task_name)
+                if mapped_task:
+                    tasks_to_notify.append(mapped_task)
+
+                for notify_name in tasks_to_notify:
+                    await analysis_trigger.mark_task_completed(notify_name)
+                    logger.info(f"Notified analysis trigger: {notify_name} completed")
         except Exception as e:
             logger.warning(f"Failed to notify task completion for {task_name}: {e}")
 
