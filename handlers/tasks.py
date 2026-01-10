@@ -49,6 +49,25 @@ class TaskHandler(BaseHandler):
             self.logger.warning(f"Load flowhub tasks failed: {e}")
             errors.append({'service': 'flowhub', 'error': str(e)})
 
+        # Flowhub 即时任务（Job）列表
+        try:
+            flowhub_job_payload = await self._fetch_service_json(request, 'flowhub', '/api/v1/jobs', {
+                'limit': limit,
+                'offset': offset
+            })
+            flowhub_job_data = flowhub_job_payload.get('data') if isinstance(flowhub_job_payload, dict) else None
+            flowhub_jobs = []
+            if isinstance(flowhub_job_data, dict):
+                flowhub_jobs = flowhub_job_data.get('jobs', [])
+            elif isinstance(flowhub_job_payload, dict):
+                flowhub_jobs = flowhub_job_payload.get('jobs', [])
+            elif isinstance(flowhub_job_payload, list):
+                flowhub_jobs = flowhub_job_payload
+            tasks.extend([self._normalize_job_task('flowhub', j) for j in flowhub_jobs])
+        except Exception as e:
+            self.logger.warning(f"Load flowhub jobs failed: {e}")
+            errors.append({'service': 'flowhub_jobs', 'error': str(e)})
+
         # Execution/Macro/Portfolio Job 列表
         for service in ('execution', 'macro', 'portfolio'):
             try:
@@ -70,6 +89,25 @@ class TaskHandler(BaseHandler):
                 errors.append({'service': service, 'error': str(e)})
 
         return self.success_response({'tasks': tasks, 'errors': errors})
+
+    async def get_job_status(self, request: web.Request) -> web.Response:
+        """代理获取任务状态（默认走 Flowhub）"""
+        try:
+            job_id = self.get_path_params(request)['job_id']
+            query_params = self.get_query_params(request)
+            service = (query_params.get('service') or 'flowhub').lower()
+
+            if service == 'flowhub':
+                payload = await self._fetch_service_json(request, 'flowhub', f'/api/v1/jobs/{job_id}/status')
+            elif service in ('execution', 'macro', 'portfolio'):
+                payload = await self._fetch_service_json(request, service, f'/api/v1/jobs/{job_id}')
+            else:
+                return self.error_response(f"Unsupported service: {service}", 400)
+
+            return self.success_response(payload)
+        except Exception as e:
+            self.logger.error(f"Get job status failed: {e}")
+            return self.error_response("获取任务状态失败", 500)
     
     async def list_tasks(self, request: web.Request) -> web.Response:
         """获取任务列表"""
@@ -240,6 +278,9 @@ class TaskHandler(BaseHandler):
             'updated_at': updated_at,
             'last_run_at': updated_at,
             'next_run_at': None,
+            'current_job_id': job.get('current_job_id') or job_id,
+            'last_job_id': job.get('last_job_id') or job_id,
+            'progress': job.get('progress'),
             'data_source': service,
             'source': service,
             'raw': job
