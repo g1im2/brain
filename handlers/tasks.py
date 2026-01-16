@@ -51,8 +51,9 @@ class TaskHandler(BaseHandler):
 
         # Flowhub 即时任务（Job）列表
         try:
+            flowhub_job_limit = min(limit, 100)
             flowhub_job_payload = await self._fetch_service_json(request, 'flowhub', '/api/v1/jobs', {
-                'limit': limit,
+                'limit': flowhub_job_limit,
                 'offset': offset
             })
             flowhub_job_data = flowhub_job_payload.get('data') if isinstance(flowhub_job_payload, dict) else None
