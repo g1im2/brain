@@ -23,6 +23,8 @@ def setup_proxy_routes(app: web.Application, cors: CorsConfig = None):
         # Execution
         '/api/v1/analyze',
         '/api/v1/analyze/{tail:.*}',
+        '/api/v1/alpha',
+        '/api/v1/alpha/{tail:.*}',
         '/api/v1/backtest',
         '/api/v1/backtest/{tail:.*}',
         '/api/v1/strategy',

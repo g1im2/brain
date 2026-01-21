@@ -471,41 +471,17 @@ class StrategyAdapter(ISystemAdapter):
         return {'results': results_map}
 
 
-    async def query_analysis_history(self,
-                                     symbol: str,
-                                     start_date: Optional[str] = None,
-                                     end_date: Optional[str] = None,
-                                     analyzer_type: Optional[str] = None,
-                                     page: int = 1,
-                                     page_size: int = 20,
-                                     sort_by: str = 'analysis_date',
-                                     sort_order: str = 'desc',
-                                     signal: Optional[str] = None,
-                                     min_confidence: Optional[float] = None,
-                                     max_confidence: Optional[float] = None) -> Dict[str, Any]:
-        """通过 Execution 查询分析历史（分页/排序/过滤）"""
+    async def query_analysis_history(self, **params) -> Dict[str, Any]:
+        """通过 Execution 查询分析历史（分页/排序/过滤），透传所有筛选参数"""
         if not self._http_client:
             raise AdapterException("StrategyAdapter", "HTTP client not initialized")
-        params: Dict[str, Any] = {
-            'symbol': symbol,
-            'page': page,
-            'page_size': page_size,
-            'sort_by': sort_by,
-            'sort_order': sort_order
-        }
-        if start_date:
-            params['start_date'] = start_date
-        if end_date:
-            params['end_date'] = end_date
-        if analyzer_type:
-            params['analyzer_type'] = analyzer_type
-        if signal:
-            params['signal'] = signal
-        if min_confidence is not None:
-            params['min_confidence'] = min_confidence
-        if max_confidence is not None:
-            params['max_confidence'] = max_confidence
         return await self._http_client.get('analyze/history', params=params)
+
+    async def query_signal_stream(self, **params) -> Dict[str, Any]:
+        """通过 Execution 查询信号流（游标分页）"""
+        if not self._http_client:
+            raise AdapterException("StrategyAdapter", "HTTP client not initialized")
+        return await self._http_client.get('analyze/signal/stream', params=params)
 
     async def query_backtest_history(self,
                                      strategy_type: Optional[str] = None,

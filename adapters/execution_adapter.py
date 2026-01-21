@@ -194,37 +194,13 @@ class ExecutionAdapter:
             logger.error(f"Failed to analyze symbol {symbol}: {e}")
             raise
     
-    async def get_analysis_history(self, symbol: str, analyzer_type: str = None,
-                                   page: int = 1, page_size: int = 20) -> Dict[str, Any]:
-        """获取分析历史
-        
-        Args:
-            symbol: 股票代码
-            analyzer_type: 分析器类型（可选）
-            page: 页码
-            page_size: 每页大小
-        
-        Returns:
-            Dict[str, Any]: 分析历史
-        
-        Raises:
-            Exception: 调用失败时抛出异常
-        """
+    async def get_analysis_history(self, **params) -> Dict[str, Any]:
+        """获取分析历史（透传所有筛选参数）"""
         try:
-            params = {
-                'symbol': symbol,
-                'page': page,
-                'page_size': page_size
-            }
-            
-            if analyzer_type:
-                params['analyzer_type'] = analyzer_type
-            
             response = await self._http_client.get('analyze/history', params)
-            return response.get('data', {})
-            
+            return response
         except Exception as e:
-            logger.error(f"Failed to get analysis history for {symbol}: {e}")
+            logger.error(f"Failed to get analysis history: {e}")
             raise
     
     async def health_check(self) -> bool:

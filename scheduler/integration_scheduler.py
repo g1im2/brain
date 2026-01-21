@@ -420,6 +420,15 @@ class IntegrationScheduler:
         except Exception:
             return None
 
+    def _daily_fetch_timeout_seconds(self) -> int:
+        """每日行情抓取任务等待超时（秒）"""
+        value = getattr(self.config.service, "daily_data_fetch_timeout", None)
+        try:
+            timeout = int(value) if value is not None else 86400
+        except Exception:
+            timeout = 86400
+        return max(600, timeout)
+
     def _should_trigger(self, state: Dict[str, Any], spec: Dict[str, Any], now: datetime) -> bool:
         today_str = now.date().isoformat()
         if state.get("running"):
@@ -722,7 +731,7 @@ class IntegrationScheduler:
 
         注意：
         1. 创建 Flowhub 数据抓取任务
-        2. 等待任务完成（最多30分钟）
+        2. 等待任务完成（超时可配置）
         3. 通知 AnalysisTriggerScheduler 各个数据抓取任务已完成
         """
         flowhub_adapter = None
@@ -748,9 +757,9 @@ class IntegrationScheduler:
                 job_id = run_result.get('job_id')
                 logger.info(f"Daily data fetch job created: {job_id}")
 
-                # 等待任务完成（最多30分钟）
-                logger.info(f"Waiting for job {job_id} to complete (timeout: 30 minutes)...")
-                result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=14400)
+                timeout_seconds = self._daily_fetch_timeout_seconds()
+                logger.info(f"Waiting for job {job_id} to complete (timeout: {timeout_seconds}s)...")
+                result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=timeout_seconds)
 
                 job_status = result.get('status')
                 if self._is_success_status(job_status):
@@ -911,7 +920,8 @@ class IntegrationScheduler:
                                     job_id = running_job_id
                                     logger.info(f"Falling back to running batch_daily_ohlc job {job_id} for daily data fetch")
                         logger.info(f"Daily data fetch already running for today, waiting for job {job_id} to complete...")
-                        result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=14400)
+                        timeout_seconds = self._daily_fetch_timeout_seconds()
+                        result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=timeout_seconds)
                         job_status = result.get("status")
                         if self._is_success_status(job_status):
                             logger.info(f"Daily data fetch job {job_id} completed successfully")
@@ -962,7 +972,8 @@ class IntegrationScheduler:
                 logger.info(f"Switching to running batch_daily_ohlc job {running_job_id} after trigger")
                 job_id = running_job_id
 
-            result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=14400)
+            timeout_seconds = self._daily_fetch_timeout_seconds()
+            result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=timeout_seconds)
             job_status = result.get("status")
             if self._is_success_status(job_status):
                 logger.info(f"Daily data fetch job {job_id} completed successfully")
@@ -1070,7 +1081,8 @@ class IntegrationScheduler:
             if not job_id:
                 return None
             logger.info(f"Retrying daily data fetch with job {job_id}")
-            return await flowhub_adapter.wait_for_job_completion(job_id, timeout=14400)
+            timeout_seconds = self._daily_fetch_timeout_seconds()
+            return await flowhub_adapter.wait_for_job_completion(job_id, timeout=timeout_seconds)
         except Exception as retry_err:
             logger.warning(f"Daily data fetch retry failed: {retry_err}")
             return None

@@ -103,46 +103,77 @@ class ServiceHandler(BaseHandler):
     async def get_execution_analysis_history(self, request: web.Request) -> web.Response:
         """代理查询 Execution 的分析历史（GET /api/v1/analyze/history，支持分页/排序/过滤）"""
         try:
-            p = self.get_query_params(request)
-            symbol = p.get('symbol')
-            if not symbol:
-                return self.error_response("symbol 参数是必需的", 400)
-            analyzer_type = p.get('analyzer_type')
-            start_date = p.get('start_date')
-            end_date = p.get('end_date')
-            page = int(p.get('page', 1))
-            page_size = int(p.get('page_size', 20))
-            sort_by = p.get('sort_by', 'analysis_date')
-            sort_order = p.get('sort_order', 'desc')
-            signal = p.get('signal')
-            min_confidence = p.get('min_confidence')
-            max_confidence = p.get('max_confidence')
-            if min_confidence is not None:
-                min_confidence = float(min_confidence)
-            if max_confidence is not None:
-                max_confidence = float(max_confidence)
+            params = self.get_query_params(request)
+            # 参数统一转成对应类型（仅在存在时转换）
+            def to_float(key):
+                if key in params and params[key] is not None:
+                    params[key] = float(params[key])
+            def to_int(key, default=None):
+                if key in params and params[key] is not None:
+                    params[key] = int(params[key])
+                elif default is not None and key not in params:
+                    params[key] = default
+
+            to_int('page', 1)
+            to_int('page_size', 20)
+            to_float('min_confidence')
+            to_float('max_confidence')
+            to_float('min_strength')
+            to_float('max_strength')
+            to_float('min_turnover_rate')
+            to_float('min_market_cap')
+            to_float('max_pe')
+            to_float('min_amount')
+            to_float('min_price')
+            to_float('max_price')
 
             coordinator = self.get_app_component(request, 'coordinator')
             strategy_adapter = getattr(coordinator, '_strategy_adapter', None)
             if not strategy_adapter:
                 return self.error_response("StrategyAdapter 未初始化", 503)
 
-            result = await strategy_adapter.query_analysis_history(
-                symbol=symbol,
-                start_date=start_date,
-                end_date=end_date,
-                analyzer_type=analyzer_type,
-                page=page,
-                page_size=page_size,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                signal=signal,
-                min_confidence=min_confidence,
-                max_confidence=max_confidence
-            )
+            result = await strategy_adapter.query_analysis_history(**params)
+            # Execution 已返回标准 {success, data, ...}，保持原样透传
+            if isinstance(result, dict) and 'success' in result:
+                return web.json_response(result)
             return self.success_response(result)
         except Exception as e:
             self.logger.error(f"Query execution analysis history failed: {e}")
+            return self.error_response("查询失败", 500)
+
+    async def get_execution_signal_stream(self, request: web.Request) -> web.Response:
+        """代理查询 Execution 信号流（GET /api/v1/analyze/signal/stream）"""
+        try:
+            params = self.get_query_params(request)
+            def to_float(key):
+                if key in params and params[key] is not None:
+                    params[key] = float(params[key])
+            def to_int(key):
+                if key in params and params[key] is not None:
+                    params[key] = int(params[key])
+
+            to_int('page_size')
+            to_float('min_confidence')
+            to_float('max_confidence')
+            to_float('min_strength')
+            to_float('max_strength')
+            to_float('min_turnover_rate')
+            to_float('min_market_cap')
+            to_float('max_pe')
+            to_float('min_amount')
+            to_float('min_price')
+            to_float('max_price')
+            coordinator = self.get_app_component(request, 'coordinator')
+            strategy_adapter = getattr(coordinator, '_strategy_adapter', None)
+            if not strategy_adapter:
+                return self.error_response("StrategyAdapter 未初始化", 503)
+
+            result = await strategy_adapter.query_signal_stream(**params)
+            if isinstance(result, dict) and 'success' in result:
+                return web.json_response(result)
+            return self.success_response(result)
+        except Exception as e:
+            self.logger.error(f"Query execution signal stream failed: {e}")
             return self.error_response("查询失败", 500)
 
     async def get_execution_backtest_history(self, request: web.Request) -> web.Response:

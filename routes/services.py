@@ -62,9 +62,16 @@ def setup_service_routes(app: web.Application, cors: CorsConfig = None):
         cors.add(route)
 
     # Execution 历史分析查询代理（GET /api/v1/analyze/history）
-    route = app.router.add_get('/api/v1/services/execution/analyze/history', service_handler.get_execution_analysis_history)
-    if cors:
-        cors.add(route)
+    for path in ['/api/v1/services/execution/analyze/history', '/api/v1/analyze/history']:
+        route = app.router.add_get(path, service_handler.get_execution_analysis_history)
+        if cors:
+            cors.add(route)
+
+    # Execution 信号流查询代理（GET /api/v1/analyze/signal/stream）
+    for path in ['/api/v1/services/execution/analyze/signal/stream', '/api/v1/analyze/signal/stream']:
+        route = app.router.add_get(path, service_handler.get_execution_signal_stream)
+        if cors:
+            cors.add(route)
 
     # Execution 回测历史查询代理（GET /api/v1/backtest/history）
     route = app.router.add_get('/api/v1/services/execution/backtest/history', service_handler.get_execution_backtest_history)
