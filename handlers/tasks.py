@@ -51,6 +51,18 @@ class TaskHandler(BaseHandler):
             self.logger.warning(f"Load flowhub tasks failed: {e}")
             errors.append({'service': 'flowhub', 'error': str(e)})
 
+        task_ids = {t.get('task_id') for t in tasks if t.get('task_id')}
+        task_names = {t.get('name') for t in tasks if t.get('name')}
+
+        def should_include_job(job: Dict[str, Any]) -> bool:
+            job_task_id = job.get('task_id') or job.get('taskId')
+            if job_task_id and job_task_id in task_ids:
+                return False
+            job_task_name = job.get('task_name') or job.get('taskName')
+            if job_task_name and job_task_name in task_names:
+                return False
+            return True
+
         # Flowhub 即时任务（Job）列表
         if include_jobs:
             try:
@@ -67,7 +79,7 @@ class TaskHandler(BaseHandler):
                     flowhub_jobs = flowhub_job_payload.get('jobs', [])
                 elif isinstance(flowhub_job_payload, list):
                     flowhub_jobs = flowhub_job_payload
-                tasks.extend([self._normalize_job_task('flowhub', j) for j in flowhub_jobs])
+                tasks.extend([self._normalize_job_task('flowhub', j) for j in flowhub_jobs if should_include_job(j)])
             except Exception as e:
                 self.logger.warning(f"Load flowhub jobs failed: {e}")
                 errors.append({'service': 'flowhub_jobs', 'error': str(e)})
@@ -88,7 +100,7 @@ class TaskHandler(BaseHandler):
                         jobs = job_payload.get('jobs', [])
                     elif isinstance(job_payload, list):
                         jobs = job_payload
-                    tasks.extend([self._normalize_job_task(service, j) for j in jobs])
+                    tasks.extend([self._normalize_job_task(service, j) for j in jobs if should_include_job(j)])
                 except Exception as e:
                     self.logger.warning(f"Load {service} jobs failed: {e}")
                     errors.append({'service': service, 'error': str(e)})
