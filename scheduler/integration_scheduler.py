@@ -697,6 +697,47 @@ class IntegrationScheduler:
         except Exception as e:
             raise AdapterException("IntegrationScheduler", f"Task not found: {task_id}")
 
+    async def get_task_status(self, task_id: str) -> Dict[str, Any]:
+        """获取任务运行状态（供 jobs/status 使用）"""
+        task_name = task_id
+        try:
+            task = await self.get_task(task_id)
+            task_name = task.get('name') or task_id
+            # 自定义任务用 task_id 作为状态键
+            if task.get('source') == 'custom':
+                task_name = task_id
+        except Exception:
+            # 任务不存在时仍返回 unknown
+            return {
+                'job_id': task_id,
+                'status': 'unknown',
+                'progress': 0
+            }
+
+        state_key = self._state_key(task_name)
+        state = self._get_task_state(state_key)
+        status = 'running' if state.get('running') else (state.get('last_status') or 'idle')
+        progress = 100 if self._is_success_status(status) else 0
+        if status in {"failed", "cancelled", "canceled"}:
+            progress = 0
+
+        message = None
+        if self._task_history:
+            for record in reversed(self._task_history):
+                if record.get('task_id') == task_id or record.get('task_name') == task_name:
+                    message = record.get('message')
+                    break
+
+        return {
+            'job_id': task_id,
+            'status': status,
+            'progress': progress,
+            'started_at': state.get('last_started_at'),
+            'completed_at': state.get('last_completed_at'),
+            'updated_at': state.get('last_updated_at'),
+            'message': message
+        }
+
     async def trigger_task(self, task_id: str) -> Dict[str, Any]:
         """手动触发任务"""
         try:

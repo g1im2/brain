@@ -107,6 +107,9 @@ class TaskHandler(BaseHandler):
 
             if service == 'flowhub':
                 payload = await self._fetch_service_json(request, 'flowhub', f'/api/v1/jobs/{job_id}/status')
+            elif service == 'brain':
+                scheduler = self.get_app_component(request, 'scheduler')
+                payload = await scheduler.get_task_status(job_id)
             elif service in ('execution', 'macro', 'portfolio'):
                 payload = await self._fetch_service_json(request, service, f'/api/v1/jobs/{job_id}')
             else:
