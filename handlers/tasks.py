@@ -16,6 +16,8 @@ class TaskHandler(BaseHandler):
         query_params = self.get_query_params(request)
         limit = int(query_params.get('limit', 200))
         offset = int(query_params.get('offset', 0))
+        include_jobs = str(query_params.get('include_jobs', 'true')).lower() in ('1', 'true', 'yes')
+        compact = str(query_params.get('compact', 'false')).lower() in ('1', 'true', 'yes')
 
         tasks: List[Dict[str, Any]] = []
         errors: List[Dict[str, str]] = []
@@ -50,44 +52,49 @@ class TaskHandler(BaseHandler):
             errors.append({'service': 'flowhub', 'error': str(e)})
 
         # Flowhub 即时任务（Job）列表
-        try:
-            flowhub_job_limit = min(limit, 100)
-            flowhub_job_payload = await self._fetch_service_json(request, 'flowhub', '/api/v1/jobs', {
-                'limit': flowhub_job_limit,
-                'offset': offset
-            })
-            flowhub_job_data = flowhub_job_payload.get('data') if isinstance(flowhub_job_payload, dict) else None
-            flowhub_jobs = []
-            if isinstance(flowhub_job_data, dict):
-                flowhub_jobs = flowhub_job_data.get('jobs', [])
-            elif isinstance(flowhub_job_payload, dict):
-                flowhub_jobs = flowhub_job_payload.get('jobs', [])
-            elif isinstance(flowhub_job_payload, list):
-                flowhub_jobs = flowhub_job_payload
-            tasks.extend([self._normalize_job_task('flowhub', j) for j in flowhub_jobs])
-        except Exception as e:
-            self.logger.warning(f"Load flowhub jobs failed: {e}")
-            errors.append({'service': 'flowhub_jobs', 'error': str(e)})
-
-        # Execution/Macro/Portfolio Job 列表
-        for service in ('execution', 'macro', 'portfolio'):
+        if include_jobs:
             try:
-                job_payload = await self._fetch_service_json(request, service, '/api/v1/jobs', {
-                    'limit': limit,
+                flowhub_job_limit = min(limit, 100)
+                flowhub_job_payload = await self._fetch_service_json(request, 'flowhub', '/api/v1/jobs', {
+                    'limit': flowhub_job_limit,
                     'offset': offset
                 })
-                job_data = job_payload.get('data') if isinstance(job_payload, dict) else None
-                jobs = []
-                if isinstance(job_data, dict):
-                    jobs = job_data.get('jobs', [])
-                elif isinstance(job_payload, dict):
-                    jobs = job_payload.get('jobs', [])
-                elif isinstance(job_payload, list):
-                    jobs = job_payload
-                tasks.extend([self._normalize_job_task(service, j) for j in jobs])
+                flowhub_job_data = flowhub_job_payload.get('data') if isinstance(flowhub_job_payload, dict) else None
+                flowhub_jobs = []
+                if isinstance(flowhub_job_data, dict):
+                    flowhub_jobs = flowhub_job_data.get('jobs', [])
+                elif isinstance(flowhub_job_payload, dict):
+                    flowhub_jobs = flowhub_job_payload.get('jobs', [])
+                elif isinstance(flowhub_job_payload, list):
+                    flowhub_jobs = flowhub_job_payload
+                tasks.extend([self._normalize_job_task('flowhub', j) for j in flowhub_jobs])
             except Exception as e:
-                self.logger.warning(f"Load {service} jobs failed: {e}")
-                errors.append({'service': service, 'error': str(e)})
+                self.logger.warning(f"Load flowhub jobs failed: {e}")
+                errors.append({'service': 'flowhub_jobs', 'error': str(e)})
+
+        # Execution/Macro/Portfolio Job 列表
+        if include_jobs:
+            for service in ('execution', 'macro', 'portfolio'):
+                try:
+                    job_payload = await self._fetch_service_json(request, service, '/api/v1/jobs', {
+                        'limit': limit,
+                        'offset': offset
+                    })
+                    job_data = job_payload.get('data') if isinstance(job_payload, dict) else None
+                    jobs = []
+                    if isinstance(job_data, dict):
+                        jobs = job_data.get('jobs', [])
+                    elif isinstance(job_payload, dict):
+                        jobs = job_payload.get('jobs', [])
+                    elif isinstance(job_payload, list):
+                        jobs = job_payload
+                    tasks.extend([self._normalize_job_task(service, j) for j in jobs])
+                except Exception as e:
+                    self.logger.warning(f"Load {service} jobs failed: {e}")
+                    errors.append({'service': service, 'error': str(e)})
+
+        if compact:
+            tasks = [self._compact_task(t) for t in tasks]
 
         return self.success_response({'tasks': tasks, 'errors': errors})
 
@@ -250,6 +257,20 @@ class TaskHandler(BaseHandler):
         normalized.setdefault('data_source', 'flowhub')
         normalized.setdefault('source', 'flowhub')
         return normalized
+
+    def _compact_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        compacted = dict(task or {})
+        params = compacted.get('params') if isinstance(compacted.get('params'), dict) else {}
+        if params:
+            params = dict(params)
+            for key, value in list(params.items()):
+                if isinstance(value, list) and len(value) > 50:
+                    params[f"{key}_count"] = len(value)
+                    params.pop(key, None)
+            compacted['params'] = params
+        if 'raw' in compacted:
+            compacted.pop('raw', None)
+        return compacted
 
     def _normalize_job_task(self, service: str, job: Dict[str, Any]) -> Dict[str, Any]:
         job_id = job.get('job_id') or job.get('id') or job.get('task_id') or ''
