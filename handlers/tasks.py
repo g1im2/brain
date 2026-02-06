@@ -12,103 +12,107 @@ class TaskHandler(BaseHandler):
     """定时任务处理器"""
 
     async def list_tasks_overview(self, request: web.Request) -> web.Response:
-        """获取跨服务任务概览（含 Flowhub/Execution/Macro/Portfolio/Brain）"""
+        """获取跨服务任务概览（统一任务模型输出）"""
         query_params = self.get_query_params(request)
         limit = int(query_params.get('limit', 200))
         offset = int(query_params.get('offset', 0))
-        include_jobs = str(query_params.get('include_jobs', 'true')).lower() in ('1', 'true', 'yes')
+        service = query_params.get('service')
+        status = query_params.get('status')
         compact = str(query_params.get('compact', 'false')).lower() in ('1', 'true', 'yes')
 
-        tasks: List[Dict[str, Any]] = []
-        errors: List[Dict[str, str]] = []
-
-        # Brain 定时任务
-        try:
-            scheduler = self.get_app_component(request, 'scheduler')
-            brain_tasks = await scheduler.get_all_tasks()
-            tasks.extend([self._normalize_brain_task(t) for t in brain_tasks])
-        except Exception as e:
-            self.logger.warning(f"Load brain tasks failed: {e}")
-            errors.append({'service': 'brain', 'error': str(e)})
-
-        # Flowhub 任务调度列表
-        try:
-            flowhub_limit = min(limit, 100)
-            flowhub_payload = await self._fetch_service_json(request, 'flowhub', '/api/v1/tasks', {
-                'limit': flowhub_limit,
-                'offset': offset
-            })
-            flowhub_data = flowhub_payload.get('data') if isinstance(flowhub_payload, dict) else None
-            flowhub_tasks = []
-            if isinstance(flowhub_data, dict):
-                flowhub_tasks = flowhub_data.get('tasks', [])
-            elif isinstance(flowhub_payload, dict):
-                flowhub_tasks = flowhub_payload.get('tasks', [])
-            elif isinstance(flowhub_payload, list):
-                flowhub_tasks = flowhub_payload
-            tasks.extend([self._normalize_flowhub_task(t) for t in flowhub_tasks])
-        except Exception as e:
-            self.logger.warning(f"Load flowhub tasks failed: {e}")
-            errors.append({'service': 'flowhub', 'error': str(e)})
-
-        task_ids = {t.get('task_id') for t in tasks if t.get('task_id')}
-        task_names = {t.get('name') for t in tasks if t.get('name')}
-
-        def should_include_job(job: Dict[str, Any]) -> bool:
-            job_task_id = job.get('task_id') or job.get('taskId')
-            if job_task_id and job_task_id in task_ids:
-                return False
-            job_task_name = job.get('task_name') or job.get('taskName')
-            if job_task_name and job_task_name in task_names:
-                return False
-            return True
-
-        # Flowhub 即时任务（Job）列表
-        if include_jobs:
-            try:
-                flowhub_job_limit = min(limit, 100)
-                flowhub_job_payload = await self._fetch_service_json(request, 'flowhub', '/api/v1/jobs', {
-                    'limit': flowhub_job_limit,
-                    'offset': offset
-                })
-                flowhub_job_data = flowhub_job_payload.get('data') if isinstance(flowhub_job_payload, dict) else None
-                flowhub_jobs = []
-                if isinstance(flowhub_job_data, dict):
-                    flowhub_jobs = flowhub_job_data.get('jobs', [])
-                elif isinstance(flowhub_job_payload, dict):
-                    flowhub_jobs = flowhub_job_payload.get('jobs', [])
-                elif isinstance(flowhub_job_payload, list):
-                    flowhub_jobs = flowhub_job_payload
-                tasks.extend([self._normalize_job_task('flowhub', j) for j in flowhub_jobs if should_include_job(j)])
-            except Exception as e:
-                self.logger.warning(f"Load flowhub jobs failed: {e}")
-                errors.append({'service': 'flowhub_jobs', 'error': str(e)})
-
-        # Execution/Macro/Portfolio Job 列表
-        if include_jobs:
-            for service in ('execution', 'macro', 'portfolio'):
-                try:
-                    job_payload = await self._fetch_service_json(request, service, '/api/v1/jobs', {
-                        'limit': limit,
-                        'offset': offset
-                    })
-                    job_data = job_payload.get('data') if isinstance(job_payload, dict) else None
-                    jobs = []
-                    if isinstance(job_data, dict):
-                        jobs = job_data.get('jobs', [])
-                    elif isinstance(job_payload, dict):
-                        jobs = job_payload.get('jobs', [])
-                    elif isinstance(job_payload, list):
-                        jobs = job_payload
-                    tasks.extend([self._normalize_job_task(service, j) for j in jobs if should_include_job(j)])
-                except Exception as e:
-                    self.logger.warning(f"Load {service} jobs failed: {e}")
-                    errors.append({'service': service, 'error': str(e)})
-
+        orchestrator = self.get_app_component(request, 'task_orchestrator')
+        payload = await orchestrator.list_task_jobs(service=service, status=status, limit=limit, offset=offset)
+        tasks = payload.get('jobs', [])
         if compact:
             tasks = [self._compact_task(t) for t in tasks]
+        return self.success_response({
+            'tasks': tasks,
+            'total': payload.get('total', len(tasks)),
+            'limit': payload.get('limit', limit),
+            'offset': payload.get('offset', offset),
+            'errors': payload.get('errors', []),
+        })
 
-        return self.success_response({'tasks': tasks, 'errors': errors})
+    async def create_task_job(self, request: web.Request) -> web.Response:
+        """创建统一任务"""
+        try:
+            payload = await self.get_request_json(request)
+            service = payload.get('service')
+            job_type = payload.get('job_type')
+            params = payload.get('params') if isinstance(payload.get('params'), dict) else {}
+            metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
+            service_payload = payload.get('service_payload') if isinstance(payload.get('service_payload'), dict) else None
+            if not service:
+                return self.error_response("Missing required field: service", 400)
+            if not job_type and not service_payload:
+                return self.error_response("Missing required field: job_type", 400)
+
+            orchestrator = self.get_app_component(request, 'task_orchestrator')
+            created = await orchestrator.create_task_job(
+                service=service,
+                job_type=job_type or "unknown",
+                params=params,
+                metadata=metadata,
+                service_payload=service_payload,
+            )
+            return self.success_response(created, "任务创建成功")
+        except ValueError as exc:
+            return self.error_response(str(exc), 400)
+        except Exception as e:
+            self.logger.error(f"Create task job failed: {e}")
+            return self.error_response("创建任务失败", 500)
+
+    async def list_task_jobs(self, request: web.Request) -> web.Response:
+        """统一任务列表"""
+        try:
+            query_params = self.get_query_params(request)
+            service = query_params.get('service')
+            status = query_params.get('status')
+            limit = int(query_params.get('limit', 20))
+            offset = int(query_params.get('offset', 0))
+            orchestrator = self.get_app_component(request, 'task_orchestrator')
+            payload = await orchestrator.list_task_jobs(service=service, status=status, limit=limit, offset=offset)
+            return self.success_response(payload)
+        except Exception as e:
+            self.logger.error(f"List task jobs failed: {e}")
+            return self.error_response("获取任务列表失败", 500)
+
+    async def get_task_job(self, request: web.Request) -> web.Response:
+        """统一任务详情"""
+        try:
+            task_job_id = self.get_path_params(request)['task_job_id']
+            orchestrator = self.get_app_component(request, 'task_orchestrator')
+            payload = await orchestrator.get_task_job(task_job_id)
+            return self.success_response(payload)
+        except ValueError as exc:
+            return self.error_response(str(exc), 404)
+        except Exception as e:
+            self.logger.error(f"Get task job failed: {e}")
+            return self.error_response("获取任务详情失败", 500)
+
+    async def cancel_task_job(self, request: web.Request) -> web.Response:
+        """取消统一任务"""
+        try:
+            task_job_id = self.get_path_params(request)['task_job_id']
+            orchestrator = self.get_app_component(request, 'task_orchestrator')
+            payload = await orchestrator.cancel_task_job(task_job_id)
+            return self.success_response(payload, "任务取消成功")
+        except ValueError as exc:
+            return self.error_response(str(exc), 404)
+        except Exception as e:
+            self.logger.error(f"Cancel task job failed: {e}")
+            return self.error_response("取消任务失败", 500)
+
+    async def get_task_job_history(self, request: web.Request) -> web.Response:
+        """统一任务历史"""
+        try:
+            task_job_id = self.get_path_params(request)['task_job_id']
+            orchestrator = self.get_app_component(request, 'task_orchestrator')
+            payload = await orchestrator.get_task_job_history(task_job_id)
+            return self.success_response(payload)
+        except Exception as e:
+            self.logger.error(f"Get task job history failed: {e}")
+            return self.error_response("获取任务历史失败", 500)
 
     async def get_job_status(self, request: web.Request) -> web.Response:
         """代理获取任务状态（默认走 Flowhub）"""

@@ -26,6 +26,7 @@ from adapters.macro_adapter import MacroAdapter
 from adapters.execution_adapter import ExecutionAdapter
 from monitors.system_monitor import SystemMonitor
 from initializers.data_initializer import DataInitializationCoordinator
+from task_orchestrator import TaskOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ async def init_components(app: web.Application, config: IntegrationConfig):
 
         # 服务注册表
         app['service_registry'] = ServiceRegistry(config)
+        app['task_orchestrator'] = TaskOrchestrator(app)
 
         # Redis客户端（供调度器/分析触发使用）
         try:

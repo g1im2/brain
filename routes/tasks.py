@@ -27,6 +27,23 @@ def setup_task_routes(app: web.Application, cors: CorsConfig = None):
     if cors:
         cors.add(route)
 
+    # 统一任务控制面（前端唯一入口）
+    route = app.router.add_post('/api/v1/task-jobs', task_handler.create_task_job)
+    if cors:
+        cors.add(route)
+    route = app.router.add_get('/api/v1/task-jobs', task_handler.list_task_jobs)
+    if cors:
+        cors.add(route)
+    route = app.router.add_get('/api/v1/task-jobs/{task_job_id}', task_handler.get_task_job)
+    if cors:
+        cors.add(route)
+    route = app.router.add_post('/api/v1/task-jobs/{task_job_id}/cancel', task_handler.cancel_task_job)
+    if cors:
+        cors.add(route)
+    route = app.router.add_get('/api/v1/task-jobs/{task_job_id}/history', task_handler.get_task_job_history)
+    if cors:
+        cors.add(route)
+
     # 获取跨服务任务概览
     route = app.router.add_get('/api/v1/tasks/overview', task_handler.list_tasks_overview)
     if cors:
