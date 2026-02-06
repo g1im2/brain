@@ -85,7 +85,7 @@ class ExecutionAdapter:
         """获取执行任务状态（统一Job接口）"""
         try:
             response = await self._http_client.get(f'/api/v1/jobs/{job_id}')
-            return response.get('data', {})
+            return self._unwrap_job(response)
         except Exception as e:
             logger.error(f"Failed to get execution job status: {e}")
             raise
@@ -97,10 +97,36 @@ class ExecutionAdapter:
             if status:
                 params['status'] = status
             response = await self._http_client.get('/api/v1/jobs', params)
-            return response.get('data', {})
+            return self._unwrap_jobs_response(response)
         except Exception as e:
             logger.error(f"Failed to list execution jobs: {e}")
             raise
+
+    @staticmethod
+    def _unwrap_job(payload: Any) -> Dict[str, Any]:
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, dict):
+                if isinstance(data.get("job"), dict):
+                    return data["job"]
+                return data
+            if isinstance(payload.get("job"), dict):
+                return payload["job"]
+            return payload
+        return {}
+
+    @classmethod
+    def _unwrap_jobs_response(cls, payload: Any) -> Dict[str, Any]:
+        body = cls._unwrap_job(payload)
+        if isinstance(body.get("jobs"), list):
+            return body
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, dict) and isinstance(data.get("jobs"), list):
+                return data
+            if isinstance(payload.get("jobs"), list):
+                return payload
+        return {"jobs": [], "total": 0, "limit": 0, "offset": 0}
 
     async def wait_for_job_completion(
         self,

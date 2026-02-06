@@ -348,11 +348,27 @@ class FlowhubAdapter(ISystemAdapter):
             if status:
                 params['status'] = status
             response = await self._http_client.get('/api/v1/jobs', params=params)
-            jobs = response.get('jobs') if isinstance(response, dict) else None
-            return jobs if isinstance(jobs, list) else []
+            return self._extract_jobs(response)
         except Exception as e:
             logger.error(f"Failed to list jobs: {e}")
             raise AdapterException("FlowhubAdapter", f"List jobs failed: {e}")
+
+    @staticmethod
+    def _extract_jobs(payload: Any) -> List[Dict[str, Any]]:
+        if isinstance(payload, dict):
+            direct = payload.get("jobs")
+            if isinstance(direct, list):
+                return direct
+            data = payload.get("data")
+            if isinstance(data, dict):
+                jobs = data.get("jobs")
+                if isinstance(jobs, list):
+                    return jobs
+            if isinstance(data, list):
+                return data
+        if isinstance(payload, list):
+            return payload
+        return []
 
     async def wait_for_job_completion(self, job_id: str, timeout: int = 172800,
                                     check_interval: int = 30,
