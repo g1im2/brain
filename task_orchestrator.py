@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple
 class TaskOrchestrator:
     SERVICES = ("flowhub", "execution", "macro", "portfolio")
     HISTORY_MAX = 200
+    SERVICE_PAGE_SIZE = 200
+    SERVICE_MAX_FETCH = 5000
 
     def __init__(self, app):
         self._app = app
@@ -61,20 +63,14 @@ class TaskOrchestrator:
         offset: int = 0,
     ) -> Dict[str, Any]:
         services = [service.lower()] if service else list(self.SERVICES)
+        if service and services[0] not in self.SERVICES:
+            raise ValueError(f"Unsupported service: {service}")
         jobs: List[Dict[str, Any]] = []
         errors: List[Dict[str, str]] = []
 
         for svc in services:
-            if svc not in self.SERVICES:
-                continue
             try:
-                payload = await self._request_service(
-                    svc,
-                    "GET",
-                    "/api/v1/jobs",
-                    params={"limit": max(limit, 1), "offset": 0, **({"status": status} if status else {})},
-                )
-                raw_jobs = self._extract_jobs(payload)
+                raw_jobs = await self._list_service_jobs(svc, status=status)
                 for raw_job in raw_jobs:
                     service_job_id = self._get_service_job_id(raw_job)
                     if not service_job_id:
@@ -90,6 +86,13 @@ class TaskOrchestrator:
             except Exception as exc:
                 errors.append({"service": svc, "error": str(exc)})
 
+        jobs.sort(
+            key=lambda item: (
+                self._as_timestamp(item.get("updated_at") or item.get("completed_at") or item.get("created_at")),
+                str(item.get("id") or ""),
+            ),
+            reverse=True,
+        )
         total = len(jobs)
         page = jobs[offset: offset + limit]
         return {
@@ -99,6 +102,32 @@ class TaskOrchestrator:
             "offset": offset,
             "errors": errors,
         }
+
+    async def _list_service_jobs(self, service: str, status: Optional[str]) -> List[Dict[str, Any]]:
+        jobs: List[Dict[str, Any]] = []
+        page_size = self.SERVICE_PAGE_SIZE
+        svc_offset = 0
+
+        while svc_offset < self.SERVICE_MAX_FETCH:
+            payload = await self._request_service(
+                service,
+                "GET",
+                "/api/v1/jobs",
+                params={
+                    "limit": page_size,
+                    "offset": svc_offset,
+                    **({"status": status} if status else {}),
+                },
+            )
+            page = self._extract_jobs(payload)
+            if not page:
+                break
+            jobs.extend(page)
+            if len(page) < page_size:
+                break
+            svc_offset += page_size
+
+        return jobs
 
     async def get_task_job(self, task_job_id: str) -> Dict[str, Any]:
         service, service_job_id, mapped_task_job_id = await self._resolve_task_job_id(task_job_id)
@@ -425,3 +454,20 @@ class TaskOrchestrator:
     def _utc_now() -> str:
         return datetime.utcnow().isoformat() + "Z"
 
+    @staticmethod
+    def _as_timestamp(value: Any) -> float:
+        if value is None:
+            return 0.0
+        if isinstance(value, (int, float)):
+            return float(value)
+        text = str(value).strip()
+        if not text:
+            return 0.0
+        try:
+            return float(text)
+        except Exception:
+            pass
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
