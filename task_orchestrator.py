@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 class TaskOrchestrator:
     SERVICES = ("flowhub", "execution", "macro", "portfolio")
+    HISTORY_MAX = 200
 
     def __init__(self, app):
         self._app = app
@@ -43,13 +44,13 @@ class TaskOrchestrator:
             "created_at": self._utc_now(),
             "metadata": metadata or {},
         }
-        self._brain_jobs[task_job_id] = record
+        await self._save_task_record(record)
 
         job_payload = await self._safe_get_service_job(service, service_job_id)
         normalized = self._normalize_job(service, job_payload or {"job_id": service_job_id}, task_job_id=task_job_id)
         normalized["job_type"] = normalized.get("job_type") or job_type
         normalized["metadata"] = {**record["metadata"], **(normalized.get("metadata") or {})}
-        self._append_history(task_job_id, "created", normalized)
+        await self._append_history(task_job_id, "created", normalized)
         return normalized
 
     async def list_task_jobs(
@@ -78,11 +79,11 @@ class TaskOrchestrator:
                     service_job_id = self._get_service_job_id(raw_job)
                     if not service_job_id:
                         continue
-                    mapped_id = self._find_task_job_id(svc, service_job_id)
+                    mapped_id = await self._find_task_job_id(svc, service_job_id)
                     task_job_id = mapped_id or f"{svc}:{service_job_id}"
                     normalized = self._normalize_job(svc, raw_job, task_job_id=task_job_id)
                     if mapped_id:
-                        self._append_history_if_changed(mapped_id, normalized)
+                        await self._append_history_if_changed(mapped_id, normalized)
                     if status and normalized.get("status") != self._normalize_status(status):
                         continue
                     jobs.append(normalized)
@@ -100,15 +101,15 @@ class TaskOrchestrator:
         }
 
     async def get_task_job(self, task_job_id: str) -> Dict[str, Any]:
-        service, service_job_id, mapped_task_job_id = self._resolve_task_job_id(task_job_id)
+        service, service_job_id, mapped_task_job_id = await self._resolve_task_job_id(task_job_id)
         payload = await self._request_service(service, "GET", f"/api/v1/jobs/{service_job_id}")
         normalized = self._normalize_job(service, self._extract_data(payload), task_job_id=mapped_task_job_id or task_job_id)
         if mapped_task_job_id:
-            self._append_history_if_changed(mapped_task_job_id, normalized)
+            await self._append_history_if_changed(mapped_task_job_id, normalized)
         return normalized
 
     async def cancel_task_job(self, task_job_id: str) -> Dict[str, Any]:
-        service, service_job_id, mapped_task_job_id = self._resolve_task_job_id(task_job_id)
+        service, service_job_id, mapped_task_job_id = await self._resolve_task_job_id(task_job_id)
         await self._request_service(service, "DELETE", f"/api/v1/jobs/{service_job_id}")
         payload = await self._safe_get_service_job(service, service_job_id)
         normalized = self._normalize_job(
@@ -117,17 +118,17 @@ class TaskOrchestrator:
             task_job_id=mapped_task_job_id or task_job_id,
         )
         if mapped_task_job_id:
-            self._append_history(mapped_task_job_id, "cancelled", normalized)
+            await self._append_history(mapped_task_job_id, "cancelled", normalized)
         return normalized
 
     async def get_task_job_history(self, task_job_id: str) -> Dict[str, Any]:
         try:
-            service, service_job_id, mapped_task_job_id = self._resolve_task_job_id(task_job_id)
+            service, service_job_id, mapped_task_job_id = await self._resolve_task_job_id(task_job_id)
         except Exception:
             return {"task_job_id": task_job_id, "history": []}
 
         resolved_id = mapped_task_job_id or task_job_id
-        history = list(self._history.get(resolved_id, []))
+        history = await self._get_history(resolved_id)
         if not history:
             payload = await self._safe_get_service_job(service, service_job_id)
             if payload:
@@ -139,9 +140,9 @@ class TaskOrchestrator:
 
         return {"task_job_id": resolved_id, "history": history}
 
-    def _resolve_task_job_id(self, task_job_id: str) -> Tuple[str, str, Optional[str]]:
-        if task_job_id in self._brain_jobs:
-            record = self._brain_jobs[task_job_id]
+    async def _resolve_task_job_id(self, task_job_id: str) -> Tuple[str, str, Optional[str]]:
+        record = await self._load_task_record(task_job_id)
+        if record:
             return record["service"], record["service_job_id"], task_job_id
 
         if ":" in task_job_id:
@@ -241,11 +242,17 @@ class TaskOrchestrator:
                 return value
         return None
 
-    def _find_task_job_id(self, service: str, service_job_id: str) -> Optional[str]:
+    async def _find_task_job_id(self, service: str, service_job_id: str) -> Optional[str]:
         for task_job_id, record in self._brain_jobs.items():
             if record.get("service") == service and record.get("service_job_id") == service_job_id:
                 return task_job_id
-        return None
+
+        redis = self._redis()
+        if not redis:
+            return None
+        key = self._index_key(service, service_job_id)
+        mapped = await redis.get(key)
+        return mapped or None
 
     def _normalize_job(self, service: str, job: Dict[str, Any], task_job_id: str) -> Dict[str, Any]:
         job = job if isinstance(job, dict) else {}
@@ -320,20 +327,25 @@ class TaskOrchestrator:
             return 0
         return 0
 
-    def _append_history(self, task_job_id: str, event: str, normalized_job: Dict[str, Any]) -> None:
-        history = self._history.setdefault(task_job_id, [])
-        history.append(
-            {
-                "event": event,
-                "timestamp": self._utc_now(),
-                "job": dict(normalized_job),
-            }
-        )
+    async def _append_history(self, task_job_id: str, event: str, normalized_job: Dict[str, Any]) -> None:
+        entry = {
+            "event": event,
+            "timestamp": self._utc_now(),
+            "job": dict(normalized_job),
+        }
+        self._history.setdefault(task_job_id, []).append(entry)
 
-    def _append_history_if_changed(self, task_job_id: str, normalized_job: Dict[str, Any]) -> None:
-        history = self._history.setdefault(task_job_id, [])
+        redis = self._redis()
+        if not redis:
+            return
+        key = self._history_key(task_job_id)
+        await redis.rpush(key, json.dumps(entry, ensure_ascii=False))
+        await redis.ltrim(key, -self.HISTORY_MAX, -1)
+
+    async def _append_history_if_changed(self, task_job_id: str, normalized_job: Dict[str, Any]) -> None:
+        history = await self._get_history(task_job_id)
         if not history:
-            self._append_history(task_job_id, "snapshot", normalized_job)
+            await self._append_history(task_job_id, "snapshot", normalized_job)
             return
         last_job = history[-1].get("job", {})
         if (
@@ -341,8 +353,75 @@ class TaskOrchestrator:
             or last_job.get("progress") != normalized_job.get("progress")
             or last_job.get("updated_at") != normalized_job.get("updated_at")
         ):
-            self._append_history(task_job_id, "snapshot", normalized_job)
+            await self._append_history(task_job_id, "snapshot", normalized_job)
+
+    async def _save_task_record(self, record: Dict[str, Any]) -> None:
+        task_job_id = record["task_job_id"]
+        self._brain_jobs[task_job_id] = dict(record)
+
+        redis = self._redis()
+        if not redis:
+            return
+        await redis.set(self._record_key(task_job_id), json.dumps(record, ensure_ascii=False))
+        await redis.set(self._index_key(record["service"], record["service_job_id"]), task_job_id)
+
+    async def _load_task_record(self, task_job_id: str) -> Optional[Dict[str, Any]]:
+        local = self._brain_jobs.get(task_job_id)
+        if isinstance(local, dict):
+            return dict(local)
+
+        redis = self._redis()
+        if not redis:
+            return None
+        raw = await redis.get(self._record_key(task_job_id))
+        if not raw:
+            return None
+        try:
+            record = json.loads(raw)
+        except Exception:
+            return None
+        if isinstance(record, dict):
+            self._brain_jobs[task_job_id] = dict(record)
+            return dict(record)
+        return None
+
+    async def _get_history(self, task_job_id: str) -> List[Dict[str, Any]]:
+        local = self._history.get(task_job_id)
+        if local:
+            return [dict(item) for item in local]
+
+        redis = self._redis()
+        if not redis:
+            return []
+        rows = await redis.lrange(self._history_key(task_job_id), 0, -1)
+        history: List[Dict[str, Any]] = []
+        for row in rows:
+            try:
+                parsed = json.loads(row)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                history.append(parsed)
+        if history:
+            self._history[task_job_id] = list(history)
+        return history
+
+    def _redis(self):
+        return self._app.get("redis")
+
+    @staticmethod
+    def _record_key(task_job_id: str) -> str:
+        return f"brain:task_job:{task_job_id}"
+
+    @staticmethod
+    def _index_key(service: str, service_job_id: str) -> str:
+        return f"brain:task_job:index:{service}:{service_job_id}"
+
+    @staticmethod
+    def _history_key(task_job_id: str) -> str:
+        return f"brain:task_job:history:{task_job_id}"
 
     @staticmethod
     def _utc_now() -> str:
         return datetime.utcnow().isoformat() + "Z"
+
