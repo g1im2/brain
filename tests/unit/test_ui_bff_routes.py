@@ -21,3 +21,19 @@ def test_ui_bff_read_route_mapping():
     assert route.is_mutation is False
     assert params["subject_id"] == "abc-123"
 
+
+def test_ui_bff_extended_macro_route_mapping():
+    route, params = UIBffHandler._match_route("POST", "/api/v1/ui/macro-cycle/snap-001/mark-seen")
+    assert route is not None
+    assert route.service == "macro"
+    assert route.is_mutation is True
+    assert route.job_type == "ui_macro_cycle_freeze"
+    assert params["snapshot_id"] == "snap-001"
+
+
+def test_ui_bff_extended_strategy_route_mapping():
+    route, params = UIBffHandler._match_route("GET", "/api/v1/ui/strategy/reports/rpt-001/analysis")
+    assert route is not None
+    assert route.service == "execution"
+    assert route.is_mutation is False
+    assert params["report_id"] == "rpt-001"
