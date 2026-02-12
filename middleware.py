@@ -13,6 +13,7 @@ from typing import Callable
 
 from aiohttp import web
 from aiohttp.web_middlewares import middleware
+from auth_middleware import ui_auth_guard_middleware
 
 logger = logging.getLogger(__name__)
 
@@ -287,8 +288,11 @@ def setup_middleware(app: web.Application):
     # 5. CORS处理（aiohttp_cors 已统一处理时跳过）
     if not app.get('cors_enabled'):
         app.middlewares.append(cors_middleware)
-    
-    # 6. 限流（可选，根据需要启用）
+
+    # 6. UI 鉴权门禁（仅作用于 /api/v1/ui/*）
+    app.middlewares.append(ui_auth_guard_middleware)
+
+    # 7. 限流（可选，根据需要启用）
     config = app.get('config')
     if config and hasattr(config.service, 'enable_rate_limiting') and config.service.enable_rate_limiting:
         app.middlewares.append(rate_limiting_middleware)
