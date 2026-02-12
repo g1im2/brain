@@ -26,17 +26,28 @@ class TaskOrchestrator:
     SERVICE_JOB_TYPES = {
         "macro": {
             "ui_macro_cycle_freeze",
+            "ui_macro_cycle_mark_seen",
+            "ui_macro_cycle_apply_portfolio",
+            "ui_macro_cycle_apply_snapshot",
             "ui_rotation_policy_freeze",
             "ui_rotation_policy_apply",
         },
         "execution": {
             "ui_candidates_history_query",
             "ui_candidates_promote",
+            "ui_candidates_auto_promote",
+            "ui_candidates_merge",
+            "ui_candidates_ignore",
             "ui_research_decision",
             "ui_research_freeze",
             "ui_research_compare",
+            "ui_research_archive",
+            "ui_research_unfreeze",
+            "ui_research_replace_helper",
             "ui_strategy_report_run",
             "ui_strategy_report_compare",
+            "ui_strategy_config_apply",
+            "ui_strategy_preset_save",
         },
         "portfolio": {
             "ui_sim_order_create",

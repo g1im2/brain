@@ -27,7 +27,7 @@ def test_ui_bff_extended_macro_route_mapping():
     assert route is not None
     assert route.service == "macro"
     assert route.is_mutation is True
-    assert route.job_type == "ui_macro_cycle_freeze"
+    assert route.job_type == "ui_macro_cycle_mark_seen"
     assert params["snapshot_id"] == "snap-001"
 
 
