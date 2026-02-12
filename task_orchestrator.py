@@ -200,15 +200,46 @@ class TaskOrchestrator:
 
     async def get_task_job(self, task_job_id: str) -> Dict[str, Any]:
         service, service_job_id, mapped_task_job_id = await self._resolve_task_job_id(task_job_id)
-        payload = await self._request_service(service, "GET", f"/api/v1/jobs/{service_job_id}")
-        normalized = self._normalize_job(service, self._extract_data(payload), task_job_id=mapped_task_job_id or task_job_id)
-        if mapped_task_job_id:
-            await self._append_history_if_changed(mapped_task_job_id, normalized)
-        return normalized
+        try:
+            payload = await self._request_service(service, "GET", f"/api/v1/jobs/{service_job_id}")
+            normalized = self._normalize_job(service, self._extract_data(payload), task_job_id=mapped_task_job_id or task_job_id)
+            if mapped_task_job_id:
+                await self._append_history_if_changed(mapped_task_job_id, normalized)
+            return normalized
+        except UpstreamServiceError as exc:
+            if not mapped_task_job_id:
+                raise
+            record = await self._load_task_record(mapped_task_job_id) or {}
+            fallback = self._normalize_job(
+                service,
+                {
+                    "job_id": service_job_id,
+                    "job_type": record.get("job_type"),
+                    "status": "queued",
+                    "metadata": record.get("metadata") if isinstance(record.get("metadata"), dict) else {},
+                    "message": f"upstream not available: {exc.status}",
+                },
+                task_job_id=mapped_task_job_id,
+            )
+            fallback["error"] = {
+                "upstream_status": exc.status,
+                "message": exc.error.get("message"),
+            }
+            await self._append_history(
+                mapped_task_job_id,
+                "upstream_snapshot_error",
+                fallback,
+                upstream_status=exc.status,
+            )
+            return fallback
 
     async def cancel_task_job(self, task_job_id: str) -> Dict[str, Any]:
         service, service_job_id, mapped_task_job_id = await self._resolve_task_job_id(task_job_id)
-        await self._request_service(service, "DELETE", f"/api/v1/jobs/{service_job_id}")
+        try:
+            await self._request_service(service, "DELETE", f"/api/v1/jobs/{service_job_id}")
+        except UpstreamServiceError as exc:
+            if exc.status not in {404, 409}:
+                raise
         payload = await self._safe_get_service_job(service, service_job_id)
         normalized = self._normalize_job(
             service,
