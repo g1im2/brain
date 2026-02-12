@@ -190,12 +190,16 @@ class UIBffHandler(BaseHandler):
         RouteSpec("POST", re.compile(r"^/api/v1/ui/research/freeze$"), "execution", True, "ui_research_freeze"),
         RouteSpec("POST", re.compile(r"^/api/v1/ui/research/compare$"), "execution", True, "ui_research_compare"),
         RouteSpec(
-            "PATCH",
+            "POST",
             re.compile(r"^/api/v1/ui/research/subjects/(?P<subject_id>[^/]+)/archive$"),
             "execution",
             True,
             "ui_research_archive",
-            lambda payload, params: {**payload, "subject_id": params["subject_id"], "archive": True},
+            lambda payload, params: {
+                **payload,
+                "subject_id": params["subject_id"],
+                "archive": payload.get("archive", True),
+            },
         ),
         RouteSpec(
             "POST",
