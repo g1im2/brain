@@ -133,6 +133,14 @@ class TaskOrchestrator:
                     if status and normalized.get("status") != self._normalize_status(status):
                         continue
                     jobs.append(normalized)
+            except UpstreamServiceError as exc:
+                errors.append(
+                    {
+                        "service": svc,
+                        "upstream_status": exc.status,
+                        "error": exc.error.get("message") or str(exc),
+                    }
+                )
             except Exception as exc:
                 errors.append({"service": svc, "error": str(exc)})
 

@@ -6,6 +6,7 @@ from aiohttp import web
 from typing import Any, Dict, List
 
 from handlers.base import BaseHandler
+from task_orchestrator import UpstreamServiceError
 
 
 class TaskHandler(BaseHandler):
@@ -74,6 +75,17 @@ class TaskHandler(BaseHandler):
             )
         except ValueError as exc:
             return self.error_response(str(exc), 400)
+        except UpstreamServiceError as exc:
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": exc.error.get("message"),
+                    "error_code": "UPSTREAM_REQUEST_FAILED",
+                    "upstream_status": exc.status,
+                    "upstream_service": exc.service,
+                },
+                status=exc.status if 400 <= exc.status < 500 else 502,
+            )
         except Exception as e:
             self.logger.error(f"Create task job failed: {e}")
             return self.error_response("创建任务失败", 500)
