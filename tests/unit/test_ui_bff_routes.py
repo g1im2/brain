@@ -54,3 +54,20 @@ def test_ui_bff_execution_mutation_routes_use_dedicated_job_types():
     assert route is not None
     assert route.job_type == "ui_strategy_config_apply"
     assert route.is_mutation is True
+
+
+def test_ui_bff_archive_route_uses_post_and_preserves_archive_flag():
+    route, params = UIBffHandler._match_route("POST", "/api/v1/ui/research/subjects/sub-1/archive")
+    assert route is not None
+    assert route.job_type == "ui_research_archive"
+    assert route.is_mutation is True
+    assert params["subject_id"] == "sub-1"
+
+    assert route.params_builder is not None
+    payload_true = route.params_builder({"archive": True}, params)
+    payload_false = route.params_builder({"archive": False}, params)
+    payload_default = route.params_builder({}, params)
+
+    assert payload_true["archive"] is True
+    assert payload_false["archive"] is False
+    assert payload_default["archive"] is True
