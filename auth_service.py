@@ -162,7 +162,15 @@ class AuthService:
         await asyncio.to_thread(self._api.seed_defaults)
         admin = await asyncio.to_thread(self._api.get_user_by_username, "admin")
         if admin and not admin.get("password_hash"):
+            # Bootstrap recovery: only heal the built-in admin when the account
+            # is in an abnormal state (missing password hash).
             await asyncio.to_thread(self._api.set_user_password, str(admin.get("id")), self._password_hash(self._admin_password), "system")
+            reset_reason = "bootstrap_missing_password_hash"
+            if hasattr(self._api, "reset_user_auth_state"):
+                await asyncio.to_thread(self._api.reset_user_auth_state, str(admin.get("id")), "system", reset_reason)
+            else:
+                # Backward-compatible fallback when older econdb is still loaded.
+                await asyncio.to_thread(self._api.record_login_success, str(admin.get("id")), None)
             await asyncio.to_thread(
                 self._api.append_audit_log,
                 SystemAuditDTO(
@@ -171,7 +179,7 @@ class AuthService:
                     action="auth.bootstrap_admin_password",
                     target_type="user",
                     target_id=str(admin.get("id")),
-                    payload={"username": "admin"},
+                    payload={"username": "admin", "lock_reset": True, "reason": reset_reason},
                     created_at=self._to_iso(self._utc_now()),
                 ),
             )
@@ -430,4 +438,3 @@ class AuthService:
             "claims": claims,
             "user": self._sanitize_user(user),
         }
-
