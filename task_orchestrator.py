@@ -2,14 +2,53 @@
 统一任务编排器
 """
 
+import hashlib
 import json
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 
+class UpstreamServiceError(RuntimeError):
+    """Raised when upstream service returns non-success HTTP status."""
+
+    def __init__(self, service: str, method: str, path: str, status: int, error: Dict[str, Any]):
+        self.service = service
+        self.method = method
+        self.path = path
+        self.status = status
+        self.error = error
+        super().__init__(f"{service} {method} {path} -> HTTP {status}")
+
+
 class TaskOrchestrator:
     SERVICES = ("flowhub", "execution", "macro", "portfolio")
+    SERVICE_JOB_TYPES = {
+        "macro": {
+            "ui_macro_cycle_freeze",
+            "ui_rotation_policy_freeze",
+            "ui_rotation_policy_apply",
+        },
+        "execution": {
+            "ui_candidates_history_query",
+            "ui_candidates_promote",
+            "ui_research_decision",
+            "ui_research_freeze",
+            "ui_research_compare",
+            "ui_strategy_report_run",
+            "ui_strategy_report_compare",
+        },
+        "portfolio": {
+            "ui_sim_order_create",
+            "ui_sim_order_cancel",
+        },
+        "flowhub": {
+            "backfill_full_history",
+            "backfill_data_type_history",
+            "backfill_resume_run",
+            "backfill_retry_failed_shards",
+        },
+    }
     HISTORY_MAX = 200
     SERVICE_PAGE_SIZE = 200
     SERVICE_MAX_FETCH = 5000
@@ -30,8 +69,12 @@ class TaskOrchestrator:
         service = (service or "").lower()
         if service not in self.SERVICES:
             raise ValueError(f"Unsupported service: {service}")
+        self._validate_job_type(service, job_type)
+        normalized_params = self._normalize_params(params)
+        normalized_metadata = self._normalize_metadata(metadata)
 
-        payload = service_payload if isinstance(service_payload, dict) else self._build_create_payload(service, job_type, params or {})
+        payload = service_payload if isinstance(service_payload, dict) else self._build_create_payload(service, job_type, normalized_params)
+        request_payload_hash = self._hash_payload(payload)
         response = await self._request_service(service, "POST", "/api/v1/jobs", payload=payload)
         service_job_id = self._extract_job_id(response)
         if not service_job_id:
@@ -44,7 +87,8 @@ class TaskOrchestrator:
             "service_job_id": service_job_id,
             "job_type": job_type,
             "created_at": self._utc_now(),
-            "metadata": metadata or {},
+            "metadata": normalized_metadata,
+            "request_payload_hash": request_payload_hash,
         }
         await self._save_task_record(record)
 
@@ -52,7 +96,13 @@ class TaskOrchestrator:
         normalized = self._normalize_job(service, job_payload or {"job_id": service_job_id}, task_job_id=task_job_id)
         normalized["job_type"] = normalized.get("job_type") or job_type
         normalized["metadata"] = {**record["metadata"], **(normalized.get("metadata") or {})}
-        await self._append_history(task_job_id, "created", normalized)
+        await self._append_history(
+            task_job_id,
+            "created",
+            normalized,
+            request_payload_hash=request_payload_hash,
+            upstream_status=202,
+        )
         return normalized
 
     async def list_task_jobs(
@@ -182,6 +232,30 @@ class TaskOrchestrator:
 
         raise ValueError(f"Unknown task_job_id: {task_job_id}")
 
+    def _validate_job_type(self, service: str, job_type: str) -> None:
+        value = (job_type or "").strip()
+        if not value:
+            raise ValueError("Missing required field: job_type")
+        allowed = self.SERVICE_JOB_TYPES.get(service, set())
+        if allowed and value not in allowed:
+            raise ValueError(f"Unsupported job_type for {service}: {job_type}")
+
+    @staticmethod
+    def _normalize_params(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if params is None:
+            return {}
+        if not isinstance(params, dict):
+            raise ValueError("params must be a JSON object")
+        return dict(params)
+
+    @staticmethod
+    def _normalize_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if metadata is None:
+            return {}
+        if not isinstance(metadata, dict):
+            raise ValueError("metadata must be a JSON object")
+        return dict(metadata)
+
     def _build_create_payload(self, service: str, job_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if service == "flowhub":
             flowhub_payload = dict(params)
@@ -191,6 +265,32 @@ class TaskOrchestrator:
             "job_type": job_type,
             "params": params,
         }
+
+    @staticmethod
+    def _normalize_upstream_error(payload: Any, status: int) -> Dict[str, Any]:
+        if isinstance(payload, dict):
+            message = (
+                payload.get("error")
+                or payload.get("message")
+                or (payload.get("data") or {}).get("error")
+                if isinstance(payload.get("data"), dict)
+                else None
+            )
+            return {
+                "status": status,
+                "message": str(message or f"Upstream request failed with status {status}"),
+                "raw": payload,
+            }
+        return {
+            "status": status,
+            "message": f"Upstream request failed with status {status}",
+            "raw": payload,
+        }
+
+    @staticmethod
+    def _hash_payload(payload: Dict[str, Any]) -> str:
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     async def _safe_get_service_job(self, service: str, service_job_id: str) -> Optional[Dict[str, Any]]:
         try:
@@ -221,7 +321,13 @@ class TaskOrchestrator:
             except Exception:
                 data = {"raw": text}
             if resp.status >= 400:
-                raise RuntimeError(f"{service} {method} {path} -> HTTP {resp.status}: {text[:300]}")
+                raise UpstreamServiceError(
+                    service=service,
+                    method=method,
+                    path=path,
+                    status=resp.status,
+                    error=self._normalize_upstream_error(data, resp.status),
+                )
             if isinstance(data, dict):
                 return data
             return {"data": data}
@@ -356,12 +462,23 @@ class TaskOrchestrator:
             return 0
         return 0
 
-    async def _append_history(self, task_job_id: str, event: str, normalized_job: Dict[str, Any]) -> None:
+    async def _append_history(
+        self,
+        task_job_id: str,
+        event: str,
+        normalized_job: Dict[str, Any],
+        request_payload_hash: Optional[str] = None,
+        upstream_status: Optional[int] = None,
+    ) -> None:
         entry = {
             "event": event,
             "timestamp": self._utc_now(),
             "job": dict(normalized_job),
         }
+        if request_payload_hash:
+            entry["request_payload_hash"] = request_payload_hash
+        if upstream_status is not None:
+            entry["upstream_status"] = upstream_status
         self._history.setdefault(task_job_id, []).append(entry)
 
         redis = self._redis()

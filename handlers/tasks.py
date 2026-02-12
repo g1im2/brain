@@ -55,7 +55,23 @@ class TaskHandler(BaseHandler):
                 metadata=metadata,
                 service_payload=service_payload,
             )
-            return self.success_response(created, "任务创建成功")
+            task_job_id = created.get("id")
+            response_data = {
+                "task_job_id": task_job_id,
+                "status_url": f"/api/v1/task-jobs/{task_job_id}" if task_job_id else None,
+                "cancel_url": f"/api/v1/task-jobs/{task_job_id}/cancel" if task_job_id else None,
+                "history_url": f"/api/v1/task-jobs/{task_job_id}/history" if task_job_id else None,
+                "job": created,
+            }
+            return web.json_response(
+                {
+                    "success": True,
+                    "status": "accepted",
+                    "data": response_data,
+                    "message": "任务创建成功",
+                },
+                status=202,
+            )
         except ValueError as exc:
             return self.error_response(str(exc), 400)
         except Exception as e:
