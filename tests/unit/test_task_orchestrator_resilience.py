@@ -70,3 +70,29 @@ async def test_cancel_task_job_tolerates_upstream_404(monkeypatch):
     assert result["service"] == "macro"
     assert result["service_job_id"] == "svc-job-2"
     assert result["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_find_task_job_id_returns_none_when_redis_get_fails(monkeypatch):
+    orchestrator = TaskOrchestrator({"redis": None})
+
+    class _BadRedis:
+        async def get(self, _key):
+            raise RuntimeError("loop mismatch")
+
+    monkeypatch.setattr(orchestrator, "_redis", lambda: _BadRedis())
+    mapped = await orchestrator._find_task_job_id("macro", "svc-job-3")
+    assert mapped is None
+
+
+@pytest.mark.asyncio
+async def test_load_task_record_returns_none_when_redis_get_fails(monkeypatch):
+    orchestrator = TaskOrchestrator({"redis": None})
+
+    class _BadRedis:
+        async def get(self, _key):
+            raise RuntimeError("loop mismatch")
+
+    monkeypatch.setattr(orchestrator, "_redis", lambda: _BadRedis())
+    record = await orchestrator._load_task_record("brain-job-3")
+    assert record is None

@@ -436,8 +436,11 @@ class TaskOrchestrator:
         if not redis:
             return None
         key = self._index_key(service, service_job_id)
-        mapped = await redis.get(key)
-        return mapped or None
+        try:
+            mapped = await redis.get(key)
+            return mapped or None
+        except Exception:
+            return None
 
     def _normalize_job(self, service: str, job: Dict[str, Any], task_job_id: str) -> Dict[str, Any]:
         job = job if isinstance(job, dict) else {}
@@ -534,9 +537,12 @@ class TaskOrchestrator:
         redis = self._redis()
         if not redis:
             return
-        key = self._history_key(task_job_id)
-        await redis.rpush(key, json.dumps(entry, ensure_ascii=False))
-        await redis.ltrim(key, -self.HISTORY_MAX, -1)
+        try:
+            key = self._history_key(task_job_id)
+            await redis.rpush(key, json.dumps(entry, ensure_ascii=False))
+            await redis.ltrim(key, -self.HISTORY_MAX, -1)
+        except Exception:
+            return
 
     async def _append_history_if_changed(self, task_job_id: str, normalized_job: Dict[str, Any]) -> None:
         history = await self._get_history(task_job_id)
@@ -558,8 +564,11 @@ class TaskOrchestrator:
         redis = self._redis()
         if not redis:
             return
-        await redis.set(self._record_key(task_job_id), json.dumps(record, ensure_ascii=False))
-        await redis.set(self._index_key(record["service"], record["service_job_id"]), task_job_id)
+        try:
+            await redis.set(self._record_key(task_job_id), json.dumps(record, ensure_ascii=False))
+            await redis.set(self._index_key(record["service"], record["service_job_id"]), task_job_id)
+        except Exception:
+            return
 
     async def _load_task_record(self, task_job_id: str) -> Optional[Dict[str, Any]]:
         local = self._brain_jobs.get(task_job_id)
@@ -569,7 +578,10 @@ class TaskOrchestrator:
         redis = self._redis()
         if not redis:
             return None
-        raw = await redis.get(self._record_key(task_job_id))
+        try:
+            raw = await redis.get(self._record_key(task_job_id))
+        except Exception:
+            return None
         if not raw:
             return None
         try:
@@ -589,7 +601,10 @@ class TaskOrchestrator:
         redis = self._redis()
         if not redis:
             return []
-        rows = await redis.lrange(self._history_key(task_job_id), 0, -1)
+        try:
+            rows = await redis.lrange(self._history_key(task_job_id), 0, -1)
+        except Exception:
+            return []
         history: List[Dict[str, Any]] = []
         for row in rows:
             try:
