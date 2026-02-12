@@ -125,6 +125,13 @@ class ServiceConfig:
     init_retry: Dict[str, Any] = field(default_factory=lambda: {"max_retries": 10, "backoff": [1, 2, 3, 5, 8, 13], "timeout": 300})
     init_concurrency: int = 2
 
+    # Auth 配置
+    auth_issuer: str = "autotm-brain"
+    auth_jwt_secret: str = "CHANGE_ME_AUTOTM_BRAIN_SECRET"
+    auth_access_token_ttl_seconds: int = 900
+    auth_refresh_token_ttl_seconds: int = 604800
+    auth_admin_default_password: str = "admin123!"
+
 
 @dataclass
 class LoggingConfig:
@@ -295,7 +302,12 @@ class IntegrationConfig:
                 'init_wait_dependencies': ['flowhub'],
                 'init_max_history_first_run': True,
                 'init_retry': { 'max_retries': 10, 'backoff': [1, 2, 3, 5, 8, 13], 'timeout': 300 },
-                'init_concurrency': 2
+                'init_concurrency': 2,
+                'auth_issuer': 'autotm-brain',
+                'auth_jwt_secret': 'CHANGE_ME_AUTOTM_BRAIN_SECRET',
+                'auth_access_token_ttl_seconds': 900,
+                'auth_refresh_token_ttl_seconds': 604800,
+                'auth_admin_default_password': 'admin123!'
             },
             'logging': {
                 'level': 'INFO',
@@ -376,6 +388,11 @@ class IntegrationConfig:
             'SCHEDULER_TIMEZONE': ('service', 'scheduler_timezone', str),
             'SCHEDULER_DAILY_CRON': ('service', 'daily_data_fetch_cron', str),
             'SCHEDULER_DAILY_FETCH_TIMEOUT': ('service', 'daily_data_fetch_timeout', int),
+            'BRAIN_AUTH_ISSUER': ('service', 'auth_issuer', str),
+            'BRAIN_AUTH_JWT_SECRET': ('service', 'auth_jwt_secret', str),
+            'BRAIN_AUTH_ACCESS_TOKEN_TTL_SECONDS': ('service', 'auth_access_token_ttl_seconds', int),
+            'BRAIN_AUTH_REFRESH_TOKEN_TTL_SECONDS': ('service', 'auth_refresh_token_ttl_seconds', int),
+            'BRAIN_AUTH_ADMIN_PASSWORD': ('service', 'auth_admin_default_password', str),
             # 启动数据初始化配置（环境变量覆盖）
             'INIT_DATA_ON_STARTUP': ('service', 'init_data_on_startup', bool),
             'INIT_WAIT_DEPENDENCIES': ('service', 'init_wait_dependencies', str),  # 逗号分隔

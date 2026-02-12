@@ -16,6 +16,7 @@ from .tasks import setup_task_routes
 from .monitoring import setup_monitoring_routes
 from .proxy import setup_proxy_routes
 from .ui_bff import setup_ui_bff_routes
+from .auth import setup_auth_routes
 
 
 def setup_routes(app: web.Application, cors: CorsConfig = None):
@@ -47,6 +48,9 @@ def setup_routes(app: web.Application, cors: CorsConfig = None):
     # 监控告警路由
     setup_monitoring_routes(app, cors)
 
+    # Auth 路由（需要优先于 UI BFF catch-all 注册）
+    setup_auth_routes(app, cors)
+
     # UI BFF 路由（前端统一入口）
     setup_ui_bff_routes(app, cors)
 
@@ -55,4 +59,3 @@ def setup_routes(app: web.Application, cors: CorsConfig = None):
     
     # 静态文件路由（如果需要）
     # app.router.add_static('/', path='static', name='static')
-

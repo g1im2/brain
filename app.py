@@ -27,6 +27,7 @@ from adapters.execution_adapter import ExecutionAdapter
 from monitors.system_monitor import SystemMonitor
 from initializers.data_initializer import DataInitializationCoordinator
 from task_orchestrator import TaskOrchestrator
+from auth_service import AuthService
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,11 @@ async def init_components(app: web.Application, config: IntegrationConfig):
         except Exception as redis_err:
             logger.warning(f"Failed to initialize Redis client: {redis_err}")
             app['redis'] = None
+
+        # 鉴权服务（JWT + Refresh + Redis 会话索引）
+        app['auth_service'] = AuthService(config=config, redis_client=app.get('redis'))
+        await app['auth_service'].initialize()
+        logger.info("Auth service initialized")
 
         # 核心组件（通过DI解析）
         app['coordinator'] = await app['container'].resolve(ISystemCoordinator)
