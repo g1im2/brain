@@ -131,6 +131,9 @@ class ServiceConfig:
     auth_access_token_ttl_seconds: int = 900
     auth_refresh_token_ttl_seconds: int = 604800
     auth_admin_default_password: str = "admin123!"
+    auth_lock_enabled: bool = False
+    auth_lock_threshold: int = 5
+    auth_lock_seconds: int = 600
 
 
 @dataclass
@@ -307,7 +310,10 @@ class IntegrationConfig:
                 'auth_jwt_secret': 'CHANGE_ME_AUTOTM_BRAIN_SECRET',
                 'auth_access_token_ttl_seconds': 900,
                 'auth_refresh_token_ttl_seconds': 604800,
-                'auth_admin_default_password': 'admin123!'
+                'auth_admin_default_password': 'admin123!',
+                'auth_lock_enabled': False,
+                'auth_lock_threshold': 5,
+                'auth_lock_seconds': 600,
             },
             'logging': {
                 'level': 'INFO',
@@ -393,6 +399,9 @@ class IntegrationConfig:
             'BRAIN_AUTH_ACCESS_TOKEN_TTL_SECONDS': ('service', 'auth_access_token_ttl_seconds', int),
             'BRAIN_AUTH_REFRESH_TOKEN_TTL_SECONDS': ('service', 'auth_refresh_token_ttl_seconds', int),
             'BRAIN_AUTH_ADMIN_PASSWORD': ('service', 'auth_admin_default_password', str),
+            'BRAIN_AUTH_LOCK_ENABLED': ('service', 'auth_lock_enabled', bool),
+            'BRAIN_AUTH_LOCK_THRESHOLD': ('service', 'auth_lock_threshold', int),
+            'BRAIN_AUTH_LOCK_SECONDS': ('service', 'auth_lock_seconds', int),
             # 启动数据初始化配置（环境变量覆盖）
             'INIT_DATA_ON_STARTUP': ('service', 'init_data_on_startup', bool),
             'INIT_WAIT_DEPENDENCIES': ('service', 'init_wait_dependencies', str),  # 逗号分隔

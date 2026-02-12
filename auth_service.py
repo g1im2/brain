@@ -63,6 +63,9 @@ class AuthService:
         self._access_ttl = int(getattr(service_cfg, "auth_access_token_ttl_seconds", 900) or 900)
         self._refresh_ttl = int(getattr(service_cfg, "auth_refresh_token_ttl_seconds", 604800) or 604800)
         self._admin_password = getattr(service_cfg, "auth_admin_default_password", None) or os.getenv("BRAIN_AUTH_ADMIN_PASSWORD") or "admin123!"
+        self._lock_enabled = bool(getattr(service_cfg, "auth_lock_enabled", False))
+        self._lock_threshold = int(getattr(service_cfg, "auth_lock_threshold", 5) or 5)
+        self._lock_seconds = int(getattr(service_cfg, "auth_lock_seconds", 600) or 600)
 
     @staticmethod
     def _utc_now() -> datetime:
@@ -161,6 +164,23 @@ class AuthService:
         await asyncio.to_thread(self._api.ensure_system_schema)
         await asyncio.to_thread(self._api.seed_defaults)
         admin = await asyncio.to_thread(self._api.get_user_by_username, "admin")
+        if not self._lock_enabled:
+            if hasattr(self._api, "reset_all_auth_states"):
+                await asyncio.to_thread(
+                    self._api.reset_all_auth_states,
+                    "system",
+                    "auth_lock_disabled_bootstrap",
+                )
+            elif admin and hasattr(self._api, "reset_user_auth_state"):
+                await asyncio.to_thread(
+                    self._api.reset_user_auth_state,
+                    str(admin.get("id")),
+                    "system",
+                    "auth_lock_disabled_bootstrap",
+                )
+            elif admin and hasattr(self._api, "record_login_success"):
+                # Backward-compatible fallback for older econdb baselines.
+                await asyncio.to_thread(self._api.record_login_success, str(admin.get("id")), None)
         if admin and not admin.get("password_hash"):
             # Bootstrap recovery: only heal the built-in admin when the account
             # is in an abnormal state (missing password hash).
@@ -286,13 +306,14 @@ class AuthService:
         if str(user.get("status") or "").lower() != "active":
             raise AuthError("User is disabled", 403, "ACCOUNT_DISABLED")
 
-        locked_until = self._parse_time(user.get("locked_until"))
-        if locked_until and locked_until > self._utc_now():
-            raise AuthError("Account is temporarily locked", 423, "ACCOUNT_LOCKED")
+        if self._lock_enabled:
+            locked_until = self._parse_time(user.get("locked_until"))
+            if locked_until and locked_until > self._utc_now():
+                raise AuthError("Account is temporarily locked", 423, "ACCOUNT_LOCKED")
 
         if not self._verify_password(password, user.get("password_hash")):
             failed_count = int(user.get("failed_login_count") or 0) + 1
-            lock_seconds = 600 if failed_count >= 5 else 0
+            lock_seconds = self._lock_seconds if self._lock_enabled and failed_count >= self._lock_threshold else 0
             await asyncio.to_thread(self._api.record_login_failure, str(user["id"]), lock_seconds)
             await asyncio.to_thread(
                 self._api.append_audit_log,
