@@ -37,3 +37,20 @@ def test_ui_bff_extended_strategy_route_mapping():
     assert route.service == "execution"
     assert route.is_mutation is False
     assert params["report_id"] == "rpt-001"
+
+
+def test_ui_bff_execution_mutation_routes_use_dedicated_job_types():
+    route, _ = UIBffHandler._match_route("POST", "/api/v1/ui/candidates/auto-promote")
+    assert route is not None
+    assert route.job_type == "ui_candidates_auto_promote"
+    assert route.is_mutation is True
+
+    route, _ = UIBffHandler._match_route("POST", "/api/v1/ui/research/replace-helper")
+    assert route is not None
+    assert route.job_type == "ui_research_replace_helper"
+    assert route.is_mutation is True
+
+    route, _ = UIBffHandler._match_route("POST", "/api/v1/ui/strategy/config/apply")
+    assert route is not None
+    assert route.job_type == "ui_strategy_config_apply"
+    assert route.is_mutation is True
