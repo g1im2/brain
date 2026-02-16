@@ -275,12 +275,12 @@ class MacroDataConfig:
             'monthly_tasks': {
                 'count': len(cls.get_data_types_by_frequency('monthly')),
                 'types': cls.get_data_types_by_frequency('monthly'),
-                'schedule': 'Monthly on 1st 19:00-19:30'
+                'schedule': 'Daily incremental check 19:00-19:30'
             },
             'quarterly_tasks': {
                 'count': len(cls.get_data_types_by_frequency('quarterly')),
                 'types': cls.get_data_types_by_frequency('quarterly'),
-                'schedule': 'Quarterly on 15th 19:35'
+                'schedule': 'Daily incremental check 19:35'
             },
             'yearly_tasks': {
                 'count': len(cls.get_data_types_by_frequency('yearly')),

@@ -134,14 +134,12 @@ class MacroDataTaskScheduler:
         @self._planer.task(url='/price_index_data_fetch', plans=price_index_plan)
         async def price_index_data_fetch(context: TaskContext):
             """价格指数数据抓取任务"""
-            today = date.today()
-            if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data(
-                    'price-index-data',
-                    'monthly',
-                    context.get_task_id(),
-                    context.get_task_name()
-                )
+            await self._fetch_single_macro_data(
+                'price-index-data',
+                'monthly',
+                context.get_task_id(),
+                context.get_task_name()
+            )
         
         # 货币供应量数据 (每月1日 19:05)
         money_supply_plan = PlansAt(
@@ -152,14 +150,12 @@ class MacroDataTaskScheduler:
         @self._planer.task(url='/money_supply_data_fetch', plans=money_supply_plan)
         async def money_supply_data_fetch(context: TaskContext):
             """货币供应量数据抓取任务"""
-            today = date.today()
-            if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data(
-                    'money-supply-data',
-                    'monthly',
-                    context.get_task_id(),
-                    context.get_task_name()
-                )
+            await self._fetch_single_macro_data(
+                'money-supply-data',
+                'monthly',
+                context.get_task_id(),
+                context.get_task_name()
+            )
         
         # 社会融资数据 (每月1日 19:10)
         social_financing_plan = PlansAt(
@@ -170,14 +166,12 @@ class MacroDataTaskScheduler:
         @self._planer.task(url='/social_financing_data_fetch', plans=social_financing_plan)
         async def social_financing_data_fetch(context: TaskContext):
             """社会融资数据抓取任务"""
-            today = date.today()
-            if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data(
-                    'social-financing-data',
-                    'monthly',
-                    context.get_task_id(),
-                    context.get_task_name()
-                )
+            await self._fetch_single_macro_data(
+                'social-financing-data',
+                'monthly',
+                context.get_task_id(),
+                context.get_task_name()
+            )
         
         # 投资统计数据 (每月1日 19:15)
         investment_plan = PlansAt(
@@ -188,14 +182,12 @@ class MacroDataTaskScheduler:
         @self._planer.task(url='/investment_data_fetch', plans=investment_plan)
         async def investment_data_fetch(context: TaskContext):
             """投资统计数据抓取任务"""
-            today = date.today()
-            if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data(
-                    'investment-data',
-                    'monthly',
-                    context.get_task_id(),
-                    context.get_task_name()
-                )
+            await self._fetch_single_macro_data(
+                'investment-data',
+                'monthly',
+                context.get_task_id(),
+                context.get_task_name()
+            )
         
         # 工业生产数据 (每月1日 19:20)
         industrial_plan = PlansAt(
@@ -206,14 +198,12 @@ class MacroDataTaskScheduler:
         @self._planer.task(url='/industrial_data_fetch', plans=industrial_plan)
         async def industrial_data_fetch(context: TaskContext):
             """工业生产数据抓取任务"""
-            today = date.today()
-            if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data(
-                    'industrial-data',
-                    'monthly',
-                    context.get_task_id(),
-                    context.get_task_name()
-                )
+            await self._fetch_single_macro_data(
+                'industrial-data',
+                'monthly',
+                context.get_task_id(),
+                context.get_task_name()
+            )
         
         # 景气指数数据 (每月1日 19:25)
         sentiment_index_plan = PlansAt(
@@ -224,14 +214,12 @@ class MacroDataTaskScheduler:
         @self._planer.task(url='/sentiment_index_data_fetch', plans=sentiment_index_plan)
         async def sentiment_index_data_fetch(context: TaskContext):
             """景气指数数据抓取任务"""
-            today = date.today()
-            if today.day == 1:  # 每月1日执行
-                await self._fetch_single_macro_data(
-                    'sentiment-index-data',
-                    'monthly',
-                    context.get_task_id(),
-                    context.get_task_name()
-                )
+            await self._fetch_single_macro_data(
+                'sentiment-index-data',
+                'monthly',
+                context.get_task_id(),
+                context.get_task_name()
+            )
         
         # 库存周期数据 (每月1日 19:30)
         inventory_cycle_plan = PlansAt(
@@ -262,14 +250,12 @@ class MacroDataTaskScheduler:
         @self._planer.task(url='/gdp_data_fetch', plans=gdp_plan)
         async def gdp_data_fetch(context: TaskContext):
             """GDP数据抓取任务"""
-            today = date.today()
-            if today.day == 15 and today.month in [1, 4, 7, 10]:  # 季度第一个月15日执行
-                await self._fetch_single_macro_data(
-                    'gdp-data',
-                    'quarterly',
-                    context.get_task_id(),
-                    context.get_task_name()
-                )
+            await self._fetch_single_macro_data(
+                'gdp-data',
+                'quarterly',
+                context.get_task_id(),
+                context.get_task_name()
+            )
         
         # ==================== 年度宏观数据任务 ====================
         

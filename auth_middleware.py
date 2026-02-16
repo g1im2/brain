@@ -66,9 +66,6 @@ async def ui_auth_guard_middleware(request: web.Request, handler: Callable) -> w
 
     try:
         auth_context = await auth_service.resolve_access_token(token)
-        request["auth_claims"] = auth_context.get("claims")
-        request["current_user"] = auth_context.get("user")
-        return await handler(request)
     except AuthError as exc:
         return web.json_response(
             {
@@ -89,3 +86,7 @@ async def ui_auth_guard_middleware(request: web.Request, handler: Callable) -> w
             },
             status=401,
         )
+
+    request["auth_claims"] = auth_context.get("claims")
+    request["current_user"] = auth_context.get("user")
+    return await handler(request)

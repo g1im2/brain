@@ -2,6 +2,7 @@
 统一任务编排器
 """
 
+import asyncio
 import hashlib
 import json
 import uuid
@@ -27,10 +28,12 @@ class TaskOrchestrator:
         "macro": {
             "ui_macro_cycle_freeze",
             "ui_macro_cycle_mark_seen",
+            "ui_macro_cycle_mark_seen_batch",
             "ui_macro_cycle_apply_portfolio",
             "ui_macro_cycle_apply_snapshot",
             "ui_rotation_policy_freeze",
             "ui_rotation_policy_apply",
+            "ui_rotation_policy_save",
         },
         "execution": {
             "ui_candidates_history_query",
@@ -38,6 +41,9 @@ class TaskOrchestrator:
             "ui_candidates_auto_promote",
             "ui_candidates_merge",
             "ui_candidates_ignore",
+            "ui_candidates_mark_read",
+            "ui_candidates_watchlist_update",
+            "ui_candidates_sync_from_analysis",
             "ui_research_decision",
             "ui_research_freeze",
             "ui_research_compare",
@@ -53,16 +59,15 @@ class TaskOrchestrator:
             "ui_sim_order_create",
             "ui_sim_order_cancel",
         },
-        "flowhub": {
-            "backfill_full_history",
-            "backfill_data_type_history",
-            "backfill_resume_run",
-            "backfill_retry_failed_shards",
-        },
+        # flowhub data_type evolves frequently; validate non-empty here and let flowhub
+        # enforce the exact supported set to avoid brain/service drift.
+        "flowhub": set(),
     }
     HISTORY_MAX = 200
-    SERVICE_PAGE_SIZE = 200
-    SERVICE_MAX_FETCH = 5000
+    # Keep per-service listing lightweight to avoid large payload amplification.
+    SERVICE_PAGE_SIZE = 20
+    SERVICE_MAX_FETCH = 200
+    UPSTREAM_TIMEOUT_SECONDS = 8
 
     def __init__(self, app):
         self._app = app
@@ -131,7 +136,11 @@ class TaskOrchestrator:
 
         for svc in services:
             try:
-                raw_jobs = await self._list_service_jobs(svc, status=status)
+                fetch_target = min(
+                    max(limit + offset, self.SERVICE_PAGE_SIZE),
+                    self.SERVICE_PAGE_SIZE * 2,
+                )
+                raw_jobs = await self._list_service_jobs(svc, status=status, max_items=fetch_target)
                 for raw_job in raw_jobs:
                     service_job_id = self._get_service_job_id(raw_job)
                     if not service_job_id:
@@ -139,6 +148,7 @@ class TaskOrchestrator:
                     mapped_id = await self._find_task_job_id(svc, service_job_id)
                     task_job_id = mapped_id or f"{svc}:{service_job_id}"
                     normalized = self._normalize_job(svc, raw_job, task_job_id=task_job_id)
+                    normalized = self._compact_job_for_list(normalized)
                     if mapped_id:
                         await self._append_history_if_changed(mapped_id, normalized)
                     if status and normalized.get("status") != self._normalize_status(status):
@@ -172,12 +182,13 @@ class TaskOrchestrator:
             "errors": errors,
         }
 
-    async def _list_service_jobs(self, service: str, status: Optional[str]) -> List[Dict[str, Any]]:
+    async def _list_service_jobs(self, service: str, status: Optional[str], max_items: int) -> List[Dict[str, Any]]:
         jobs: List[Dict[str, Any]] = []
         page_size = self.SERVICE_PAGE_SIZE
         svc_offset = 0
+        target = max(self.SERVICE_PAGE_SIZE, int(max_items))
 
-        while svc_offset < self.SERVICE_MAX_FETCH:
+        while svc_offset < min(self.SERVICE_MAX_FETCH, target):
             payload = await self._request_service(
                 service,
                 "GET",
@@ -192,11 +203,13 @@ class TaskOrchestrator:
             if not page:
                 break
             jobs.extend(page)
+            if len(jobs) >= target:
+                break
             if len(page) < page_size:
                 break
             svc_offset += page_size
 
-        return jobs
+        return jobs[:target]
 
     async def get_task_job(self, task_job_id: str) -> Dict[str, Any]:
         service, service_job_id, mapped_task_job_id = await self._resolve_task_job_id(task_job_id)
@@ -364,23 +377,33 @@ class TaskOrchestrator:
             raise RuntimeError(f"Service {service} not available")
 
         url = f"{service_config['url'].rstrip('/')}{path}"
-        async with session.request(method, url, json=payload, params=params) as resp:
-            text = await resp.text()
-            try:
-                data = json.loads(text) if text else {}
-            except Exception:
-                data = {"raw": text}
-            if resp.status >= 400:
-                raise UpstreamServiceError(
-                    service=service,
-                    method=method,
-                    path=path,
-                    status=resp.status,
-                    error=self._normalize_upstream_error(data, resp.status),
-                )
-            if isinstance(data, dict):
-                return data
-            return {"data": data}
+        try:
+            async with asyncio.timeout(self.UPSTREAM_TIMEOUT_SECONDS):
+                async with session.request(method, url, json=payload, params=params) as resp:
+                    text = await resp.text()
+                    try:
+                        data = json.loads(text) if text else {}
+                    except Exception:
+                        data = {"raw": text}
+                    if resp.status >= 400:
+                        raise UpstreamServiceError(
+                            service=service,
+                            method=method,
+                            path=path,
+                            status=resp.status,
+                            error=self._normalize_upstream_error(data, resp.status),
+                        )
+                    if isinstance(data, dict):
+                        return data
+                    return {"data": data}
+        except TimeoutError:
+            raise UpstreamServiceError(
+                service=service,
+                method=method,
+                path=path,
+                status=504,
+                error={"status": 504, "message": f"Upstream timeout after {self.UPSTREAM_TIMEOUT_SECONDS}s"},
+            )
 
     @staticmethod
     def _extract_data(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -483,6 +506,22 @@ class TaskOrchestrator:
             "completed_at": completed_at,
             "metadata": metadata,
         }
+
+    @staticmethod
+    def _compact_job_for_list(job: Dict[str, Any]) -> Dict[str, Any]:
+        compact = dict(job or {})
+        result = compact.get("result")
+        if result in (None, "", {}):
+            compact["result"] = result
+            return compact
+        if isinstance(result, dict):
+            compact["result"] = {"summary": "result_omitted", "keys": list(result.keys())[:10]}
+            return compact
+        if isinstance(result, list):
+            compact["result"] = {"summary": "result_omitted", "items": len(result)}
+            return compact
+        compact["result"] = {"summary": "result_omitted"}
+        return compact
 
     @staticmethod
     def _normalize_status(status: Any) -> str:

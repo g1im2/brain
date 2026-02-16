@@ -105,6 +105,18 @@ class IntegrationScheduler:
             self._trigger_daily_index_fetch
         )
 
+        # 新增任务：市场快照支撑数据抓取（交易日历/停复牌/申万行业映射）
+        blueprint.task('/daily_market_snapshot_support_fetch', plans=daily_plans)(
+            self._trigger_daily_market_snapshot_support_fetch
+        )
+
+        # 新增任务：申万行业映射月度全量校验（仅每月1日执行 full_update）
+        monthly_sw_cron = getattr(self.config.service, 'monthly_sw_industry_full_fetch_cron', None) or "at:03:20"
+        monthly_sw_plans = self._parse_cron_to_plans(monthly_sw_cron)
+        blueprint.task('/monthly_sw_industry_full_fetch', plans=monthly_sw_plans)(
+            self._trigger_monthly_sw_industry_full_fetch
+        )
+
         # 新增任务：每日板块数据抓取
         blueprint.task('/daily_board_fetch', plans=daily_plans)(
             self._trigger_daily_board_fetch
@@ -479,6 +491,8 @@ class IntegrationScheduler:
         now = datetime.now()
         daily_cron = getattr(self.config.service, 'daily_data_fetch_cron', None)
         daily_spec = self._parse_cron_spec(daily_cron) if daily_cron else {"mode": "every", "seconds": 86400}
+        monthly_sw_cron = getattr(self.config.service, 'monthly_sw_industry_full_fetch_cron', None) or "at:03:20"
+        monthly_sw_spec = self._parse_cron_spec(monthly_sw_cron)
 
         system_tasks = [
             {
@@ -493,6 +507,20 @@ class IntegrationScheduler:
                 "task_id": None,
                 "spec": daily_spec,
                 "handler": self._trigger_daily_index_fetch,
+                "handler_args": (None,)
+            },
+            {
+                "task_name": "daily_market_snapshot_support_fetch",
+                "task_id": None,
+                "spec": daily_spec,
+                "handler": self._trigger_daily_market_snapshot_support_fetch,
+                "handler_args": (None,)
+            },
+            {
+                "task_name": "monthly_sw_industry_full_fetch",
+                "task_id": None,
+                "spec": monthly_sw_spec,
+                "handler": self._trigger_monthly_sw_industry_full_fetch,
                 "handler_args": (None,)
             },
             {
@@ -1186,6 +1214,174 @@ class IntegrationScheduler:
                 except Exception as ce:
                     logger.warning(f"Failed to close FlowhubAdapter session: {ce}")
 
+    async def _trigger_daily_market_snapshot_support_fetch(self, context):
+        """触发市场快照支撑数据抓取（交易日历、停复牌、申万行业映射）。"""
+        flowhub_adapter = None
+        self._mark_task_running("daily_market_snapshot_support_fetch")
+        try:
+            logger.info("Triggering market snapshot support data fetch...")
+            flowhub_adapter = await self._get_flowhub_adapter()
+            if not flowhub_adapter:
+                logger.warning("FlowhubAdapter not available, skipping market snapshot support fetch")
+                self._record_task_execution(
+                    "daily_market_snapshot_support_fetch",
+                    "skipped",
+                    "FlowhubAdapter not available"
+                )
+                return
+
+            task_specs = [
+                (
+                    "brain_trade_calendar_fetch",
+                    "trade_calendar_data",
+                    {
+                        "data_type": "trade_calendar_data",
+                        "exchange": "SSE",
+                        "update_mode": "incremental",
+                    },
+                ),
+                (
+                    "brain_macro_calendar_fetch",
+                    "macro_calendar_data",
+                    {
+                        "data_type": "macro_calendar_data",
+                        "incremental": True,
+                    },
+                ),
+                (
+                    "brain_suspend_data_fetch",
+                    "suspend_data",
+                    {
+                        "data_type": "suspend_data",
+                        "update_mode": "incremental",
+                    },
+                ),
+                (
+                    "brain_sw_industry_fetch",
+                    "sw_industry_data",
+                    {
+                        "data_type": "sw_industry_data",
+                        "src": "SW2021",
+                        "include_members": True,
+                        "update_mode": "incremental",
+                    },
+                ),
+            ]
+
+            job_results: List[tuple[str, Optional[str], str]] = []
+            for task_name, data_type, params in task_specs:
+                task = await flowhub_adapter.ensure_task(
+                    name=task_name,
+                    data_type=data_type,
+                    params=params,
+                )
+                run_result = await flowhub_adapter.run_task(task.get("task_id"))
+                job_id = run_result.get("job_id")
+                if not job_id:
+                    job_results.append((task_name, None, "failed"))
+                    continue
+                logger.info(f"{task_name} job created: {job_id}")
+                result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
+                status = str(result.get("status") or "unknown")
+                job_results.append((task_name, job_id, status))
+
+            failed_jobs = [item for item in job_results if not self._is_success_status(item[2])]
+            if failed_jobs:
+                details = ", ".join(f"{name}:{status}" for name, _, status in failed_jobs)
+                self._record_task_execution(
+                    "daily_market_snapshot_support_fetch",
+                    "partial",
+                    f"Support data fetch partially failed ({details})"
+                )
+                return
+
+            details = ", ".join(f"{name}:{job_id}" for name, job_id, _ in job_results if job_id)
+            self._record_task_execution(
+                "daily_market_snapshot_support_fetch",
+                "completed",
+                f"Support data fetch completed ({details})"
+            )
+
+        except Exception as e:
+            logger.error(f"Market snapshot support data fetch failed: {e}", exc_info=True)
+            self._record_task_execution("daily_market_snapshot_support_fetch", "failed", str(e))
+        finally:
+            if flowhub_adapter:
+                try:
+                    await flowhub_adapter.disconnect_from_system()
+                except Exception as ce:
+                    logger.warning(f"Failed to close FlowhubAdapter session: {ce}")
+
+    async def _trigger_monthly_sw_industry_full_fetch(self, context):
+        """触发申万行业映射月度全量校验（每月1日执行）。"""
+        flowhub_adapter = None
+        self._mark_task_running("monthly_sw_industry_full_fetch")
+        try:
+            today = date.today()
+            if today.day != 1:
+                self._record_task_execution(
+                    "monthly_sw_industry_full_fetch",
+                    "skipped",
+                    f"Skip full update on non-first day ({today.isoformat()})"
+                )
+                return
+
+            logger.info("Triggering monthly sw industry full fetch...")
+            flowhub_adapter = await self._get_flowhub_adapter()
+            if not flowhub_adapter:
+                logger.warning("FlowhubAdapter not available, skipping monthly sw industry full fetch")
+                self._record_task_execution(
+                    "monthly_sw_industry_full_fetch",
+                    "skipped",
+                    "FlowhubAdapter not available"
+                )
+                return
+
+            task = await flowhub_adapter.ensure_task(
+                name="brain_sw_industry_monthly_full_fetch",
+                data_type="sw_industry_data",
+                params={
+                    "data_type": "sw_industry_data",
+                    "src": "SW2021",
+                    "include_members": True,
+                    "update_mode": "full_update",
+                },
+            )
+            run_result = await flowhub_adapter.run_task(task.get("task_id"))
+            job_id = run_result.get("job_id")
+            if not job_id:
+                self._record_task_execution(
+                    "monthly_sw_industry_full_fetch",
+                    "failed",
+                    "No job_id returned from flowhub task run"
+                )
+                return
+
+            logger.info(f"Monthly sw industry full fetch job created: {job_id}")
+            result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=3600)
+            job_status = str(result.get("status") or "unknown")
+            if self._is_success_status(job_status):
+                self._record_task_execution(
+                    "monthly_sw_industry_full_fetch",
+                    "completed",
+                    f"SW industry full update completed (job_id={job_id})"
+                )
+            else:
+                self._record_task_execution(
+                    "monthly_sw_industry_full_fetch",
+                    "failed",
+                    f"Job finished with status: {job_status} (job_id={job_id})"
+                )
+        except Exception as e:
+            logger.error(f"Monthly sw industry full fetch failed: {e}", exc_info=True)
+            self._record_task_execution("monthly_sw_industry_full_fetch", "failed", str(e))
+        finally:
+            if flowhub_adapter:
+                try:
+                    await flowhub_adapter.disconnect_from_system()
+                except Exception as ce:
+                    logger.warning(f"Failed to close FlowhubAdapter session: {ce}")
+
     async def _trigger_daily_board_fetch(self, context):
         """触发每日板块数据抓取（行业板块 + 概念板块）"""
         flowhub_adapter = None
@@ -1387,6 +1583,8 @@ class IntegrationScheduler:
                 await self._trigger_daily_data_fetch(None)
             elif func == 'daily_index_fetch':
                 await self._trigger_daily_index_fetch(None)
+            elif func == 'monthly_sw_industry_full_fetch':
+                await self._trigger_monthly_sw_industry_full_fetch(None)
             elif func == 'daily_board_fetch':
                 await self._trigger_daily_board_fetch(None)
             else:

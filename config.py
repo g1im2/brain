@@ -112,6 +112,7 @@ class ServiceConfig:
     scheduler_enabled: bool = True
     scheduler_timezone: str = "Asia/Shanghai"
     daily_data_fetch_cron: Optional[str] = None
+    monthly_sw_industry_full_fetch_cron: Optional[str] = "at:03:20"
     daily_data_fetch_timeout: int = 86400
 
     # 监控配置
@@ -298,6 +299,7 @@ class IntegrationConfig:
                 'scheduler_enabled': True,
                 'scheduler_timezone': 'Asia/Shanghai',
                 'daily_data_fetch_cron': None,
+                'monthly_sw_industry_full_fetch_cron': 'at:03:20',
                 'daily_data_fetch_timeout': 86400,
                 'monitoring_enabled': True,
                 'metrics_port': 9090,
@@ -393,6 +395,7 @@ class IntegrationConfig:
             'SCHEDULER_ENABLED': ('service', 'scheduler_enabled', bool),
             'SCHEDULER_TIMEZONE': ('service', 'scheduler_timezone', str),
             'SCHEDULER_DAILY_CRON': ('service', 'daily_data_fetch_cron', str),
+            'SCHEDULER_MONTHLY_SW_FULL_CRON': ('service', 'monthly_sw_industry_full_fetch_cron', str),
             'SCHEDULER_DAILY_FETCH_TIMEOUT': ('service', 'daily_data_fetch_timeout', int),
             'BRAIN_AUTH_ISSUER': ('service', 'auth_issuer', str),
             'BRAIN_AUTH_JWT_SECRET': ('service', 'auth_jwt_secret', str),

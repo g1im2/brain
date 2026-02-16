@@ -300,7 +300,11 @@ class AuthService:
         )
 
     async def login(self, username: str, password: str, ip_address: Optional[str] = None, user_agent: Optional[str] = None) -> TokenBundle:
-        user = await asyncio.to_thread(self._api.get_user_by_username, username)
+        identifier = str(username or "").strip()
+        if hasattr(self._api, "get_user_by_identifier"):
+            user = await asyncio.to_thread(self._api.get_user_by_identifier, identifier)
+        else:
+            user = await asyncio.to_thread(self._api.get_user_by_username, identifier)
         if not user:
             raise AuthError("Invalid username or password", 401, "INVALID_CREDENTIALS")
         if str(user.get("status") or "").lower() != "active":

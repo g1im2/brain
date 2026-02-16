@@ -317,6 +317,29 @@ class SystemMonitor:
                 return self._serialize_alert(alert)
         raise MonitoringException(f"Alert not found: {alert_id}")
 
+    def silence_alert(
+        self,
+        alert_id: str,
+        reason: str = "",
+        duration_minutes: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """静默告警（不结束告警，仅标记为静默态）。"""
+        for alert in self._alert_history:
+            if alert.alert_id != alert_id:
+                continue
+            if alert.is_resolved:
+                return self._serialize_alert(alert)
+
+            metadata = dict(alert.metadata or {})
+            metadata["silenced"] = True
+            metadata["silence_reason"] = reason or "manual_silence"
+            metadata["silenced_at"] = datetime.now().isoformat()
+            if duration_minutes and duration_minutes > 0:
+                metadata["silenced_until"] = (datetime.now() + timedelta(minutes=duration_minutes)).isoformat()
+            alert.metadata = metadata
+            return self._serialize_alert(alert)
+        raise MonitoringException(f"Alert not found: {alert_id}")
+
     def set_alert_rule(self, rule: Dict[str, Any]) -> Dict[str, Any]:
         """设置告警规则"""
         rule_id = rule.get('rule_id') or f"rule_{datetime.now().timestamp()}"

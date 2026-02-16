@@ -334,10 +334,46 @@ class AnalysisTriggerScheduler:
                     timeout=self.stock_analysis_timeout,
                     poll_interval=self.analysis_poll_interval
                 )
+                # 分析完成后，将 livermore/chanlun/多指标结果按统一入池标准同步到候选池
+                sync_enabled = str(os.getenv("EXECUTION_CANDIDATE_SYNC_ENABLED", "true")).strip().lower() not in {"0", "false", "off", "no"}
+                sync_job_id = None
+                if sync_enabled:
+                    try:
+                        sync_params = {
+                            "lookback_days": max(1, int(os.getenv("EXECUTION_CANDIDATE_SYNC_LOOKBACK_DAYS", "7"))),
+                            "max_candidates": max(1, int(os.getenv("EXECUTION_CANDIDATE_SYNC_MAX_CANDIDATES", "120"))),
+                            "analyzers": ["livermore", "chanlun", "multi_indicator"],
+                            "entry_rules": {
+                                "min_analyzer_hits": max(1, int(os.getenv("EXECUTION_CANDIDATE_SYNC_MIN_HITS", "2"))),
+                                "min_weighted_score": float(os.getenv("EXECUTION_CANDIDATE_SYNC_MIN_SCORE", "0.58")),
+                                "min_confidence": float(os.getenv("EXECUTION_CANDIDATE_SYNC_MIN_CONFIDENCE", "0.55")),
+                                "min_positive_ratio": float(os.getenv("EXECUTION_CANDIDATE_SYNC_MIN_POSITIVE_RATIO", "0.5")),
+                                "signal_whitelist": ["STRONG_BUY", "BUY", "ADD", "UNCERTAIN"],
+                                "weights": {
+                                    "livermore": 0.40,
+                                    "chanlun": 0.35,
+                                    "multi_indicator": 0.25,
+                                },
+                            },
+                        }
+                        sync_resp = await execution_adapter.sync_candidates_from_analysis(sync_params)
+                        sync_job_id = sync_resp.get("job_id") or sync_resp.get("task_id")
+                        if sync_job_id:
+                            await execution_adapter.wait_for_job_completion(
+                                str(sync_job_id),
+                                timeout=3600,
+                                poll_interval=self.analysis_poll_interval,
+                            )
+                            logger.info(f"候选池同步任务完成: {sync_job_id}")
+                        else:
+                            logger.warning(f"候选池同步触发未返回job_id: {sync_resp}")
+                    except Exception as sync_exc:
+                        logger.error(f"候选池同步失败（不影响当次批量分析完成状态）: {sync_exc}", exc_info=True)
+
                 self._record_analysis_execution(
                     "stock_batch_analysis",
                     "completed",
-                    f"Stock batch analysis completed: {job_id}",
+                    f"Stock batch analysis completed: {job_id}; candidate_sync_job={sync_job_id or 'n/a'}",
                     job_id
                 )
                 logger.info(f"股票批量分析任务完成: {job}")

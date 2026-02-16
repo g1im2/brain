@@ -102,6 +102,22 @@ class ExecutionAdapter:
             logger.error(f"Failed to list execution jobs: {e}")
             raise
 
+    async def submit_ui_job(self, job_type: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """提交 execution UI 任务（统一 jobs 契约）。"""
+        payload = {
+            "job_type": job_type,
+            "params": params if isinstance(params, dict) else {},
+        }
+        response = await self._http_client.post("/api/v1/jobs", payload)
+        data = response.get("data") if isinstance(response, dict) and isinstance(response.get("data"), dict) else response
+        if not isinstance(data, dict):
+            data = {}
+        return data
+
+    async def sync_candidates_from_analysis(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """触发“分析结果 -> 候选池”同步任务。"""
+        return await self.submit_ui_job("ui_candidates_sync_from_analysis", params=params or {})
+
     @staticmethod
     def _unwrap_job(payload: Any) -> Dict[str, Any]:
         if isinstance(payload, dict):

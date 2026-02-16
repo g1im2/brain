@@ -59,10 +59,27 @@ class MonitoringHandler(BaseHandler):
             return self.error_response("确认告警失败", 500)
 
     async def silence_alert(self, request: web.Request) -> web.Response:
-        """静默告警（占位实现）"""
+        """静默告警"""
         try:
             alert_id = self.get_path_params(request).get('alert_id')
-            return self.success_response({'alert_id': alert_id, 'silenced': True}, "告警已静默")
+            data = await self.get_request_json(request)
+            if data is None:
+                data = {}
+            if not isinstance(data, dict):
+                return self.error_response("请求体必须是 JSON 对象", 400)
+
+            reason = str(data.get("reason") or "manual_silence")
+            duration_raw = data.get("duration_minutes")
+            duration_minutes = None
+            if duration_raw not in (None, ""):
+                try:
+                    duration_minutes = int(duration_raw)
+                except Exception:
+                    return self.error_response("duration_minutes 必须是整数", 400)
+
+            system_monitor = self.get_app_component(request, 'system_monitor')
+            result = system_monitor.silence_alert(alert_id, reason=reason, duration_minutes=duration_minutes)
+            return self.success_response(result, "告警已静默")
         except Exception as e:
             self.logger.error(f"Silence alert failed: {e}")
             return self.error_response("静默告警失败", 500)
