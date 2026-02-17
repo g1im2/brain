@@ -37,6 +37,15 @@ except Exception:
 class IntegrationScheduler:
     """Integration Service 定时任务调度器"""
 
+    STRUCTURE_FLOWHUB_CRON_TEMPLATES: Dict[str, str] = {
+        "brain_industry_board_fetch": "10 16 * * 1-5",
+        "brain_concept_board_fetch": "20 16 * * 1-5",
+        "brain_industry_board_stocks_fetch": "40 16 * * 1-5",
+        "brain_concept_board_stocks_fetch": "55 16 * * 1-5",
+        "brain_industry_moneyflow_fetch": "10 17 * * 1-5",
+        "brain_batch_daily_basic_fetch": "30 17 * * 1-5",
+    }
+
     def __init__(self, config: IntegrationConfig, coordinator=None, app=None):
         """初始化调度器
 
@@ -1383,7 +1392,7 @@ class IntegrationScheduler:
                     logger.warning(f"Failed to close FlowhubAdapter session: {ce}")
 
     async def _trigger_daily_board_fetch(self, context):
-        """触发每日板块数据抓取（行业板块 + 概念板块）"""
+        """触发每日板块数据抓取（板块行情 + 成分股 + 日频基础数据）"""
         flowhub_adapter = None
         self._mark_task_running("daily_board_fetch")
         try:
@@ -1393,70 +1402,154 @@ class IntegrationScheduler:
             flowhub_adapter = await self._get_flowhub_adapter()
 
             if flowhub_adapter:
-                industry_task = await flowhub_adapter.ensure_task(
-                    name="brain_industry_board_fetch",
-                    data_type="industry_board",
-                    params={
+                task_specs = [
+                    {
+                        "name": "brain_industry_board_fetch",
                         "data_type": "industry_board",
-                        "source": "ths",
-                        "update_mode": "incremental"
-                    }
-                )
-                industry_job_result = await flowhub_adapter.run_task(industry_task.get('task_id'))
-                industry_job_id = industry_job_result.get('job_id')
-                logger.info(f"Industry board data fetch job created: {industry_job_id}")
-
-                # 创建概念板块数据抓取任务
-                concept_task = await flowhub_adapter.ensure_task(
-                    name="brain_concept_board_fetch",
-                    data_type="concept_board",
-                    params={
+                        "params": {
+                            "data_type": "industry_board",
+                            "source": "ths",
+                            "update_mode": "incremental",
+                        },
+                        "notify_key": "industry_board_data_fetch",
+                        "schedule_type": "cron",
+                        "schedule_value": self.STRUCTURE_FLOWHUB_CRON_TEMPLATES["brain_industry_board_fetch"],
+                        "timeout": 14400,
+                    },
+                    {
+                        "name": "brain_concept_board_fetch",
                         "data_type": "concept_board",
-                        "source": "ths",
-                        "update_mode": "incremental"
-                    }
-                )
-                concept_job_result = await flowhub_adapter.run_task(concept_task.get('task_id'))
-                concept_job_id = concept_job_result.get('job_id')
-                logger.info(f"Concept board data fetch job created: {concept_job_id}")
+                        "params": {
+                            "data_type": "concept_board",
+                            "source": "ths",
+                            "update_mode": "incremental",
+                        },
+                        "notify_key": "concept_board_data_fetch",
+                        "schedule_type": "cron",
+                        "schedule_value": self.STRUCTURE_FLOWHUB_CRON_TEMPLATES["brain_concept_board_fetch"],
+                        "timeout": 14400,
+                    },
+                    {
+                        "name": "brain_industry_board_stocks_fetch",
+                        "data_type": "industry_board_stocks",
+                        "params": {
+                            "data_type": "industry_board_stocks",
+                            "source": "ths",
+                            "update_mode": "incremental",
+                        },
+                        "notify_key": "industry_board_stocks_data_fetch",
+                        "schedule_type": "cron",
+                        "schedule_value": self.STRUCTURE_FLOWHUB_CRON_TEMPLATES["brain_industry_board_stocks_fetch"],
+                        "timeout": 21600,
+                    },
+                    {
+                        "name": "brain_concept_board_stocks_fetch",
+                        "data_type": "concept_board_stocks",
+                        "params": {
+                            "data_type": "concept_board_stocks",
+                            "source": "ths",
+                            "update_mode": "incremental",
+                        },
+                        "notify_key": "concept_board_stocks_data_fetch",
+                        "schedule_type": "cron",
+                        "schedule_value": self.STRUCTURE_FLOWHUB_CRON_TEMPLATES["brain_concept_board_stocks_fetch"],
+                        "timeout": 21600,
+                    },
+                    {
+                        "name": "brain_industry_moneyflow_fetch",
+                        "data_type": "industry_moneyflow_data",
+                        "params": {
+                            "data_type": "industry_moneyflow_data",
+                            "source": "ths",
+                            "incremental": True,
+                        },
+                        "notify_key": "industry_moneyflow_data_fetch",
+                        "schedule_type": "cron",
+                        "schedule_value": self.STRUCTURE_FLOWHUB_CRON_TEMPLATES["brain_industry_moneyflow_fetch"],
+                        "timeout": 21600,
+                    },
+                    {
+                        "name": "brain_batch_daily_basic_fetch",
+                        "data_type": "batch_daily_basic",
+                        "params": {
+                            "data_type": "batch_daily_basic",
+                            "incremental": True,
+                        },
+                        "notify_key": "batch_daily_basic_data_fetch",
+                        "schedule_type": "cron",
+                        "schedule_value": self.STRUCTURE_FLOWHUB_CRON_TEMPLATES["brain_batch_daily_basic_fetch"],
+                        "timeout": 21600,
+                    },
+                ]
 
-                # 等待行业板块任务完成
-                logger.info(f"Waiting for industry board job {industry_job_id} to complete...")
-                industry_result = await flowhub_adapter.wait_for_job_completion(industry_job_id, timeout=14400)
+                running_jobs: List[Dict[str, Any]] = []
+                for spec in task_specs:
+                    task = await flowhub_adapter.ensure_task(
+                        name=spec["name"],
+                        data_type=spec["data_type"],
+                        params=spec["params"],
+                        schedule_type=spec.get("schedule_type"),
+                        schedule_value=spec.get("schedule_value"),
+                        enabled=True,
+                        allow_overlap=False,
+                    )
+                    run_result = await flowhub_adapter.run_task(task.get("task_id"))
+                    job_id = run_result.get("job_id")
+                    logger.info(f"{spec['data_type']} fetch job created: {job_id}")
+                    if not job_id:
+                        running_jobs.append(
+                            {
+                                "data_type": spec["data_type"],
+                                "notify_key": spec["notify_key"],
+                                "job_id": "",
+                                "timeout": int(spec.get("timeout") or 14400),
+                                "status": "failed",
+                            }
+                        )
+                        continue
+                    running_jobs.append(
+                        {
+                            "data_type": spec["data_type"],
+                            "notify_key": spec["notify_key"],
+                            "job_id": job_id,
+                            "timeout": int(spec.get("timeout") or 14400),
+                        }
+                    )
 
-                # 等待概念板块任务完成
-                logger.info(f"Waiting for concept board job {concept_job_id} to complete...")
-                concept_result = await flowhub_adapter.wait_for_job_completion(concept_job_id, timeout=14400)
+                completed: List[Dict[str, Any]] = []
+                for job in running_jobs:
+                    if not job.get("job_id"):
+                        completed.append(job)
+                        continue
+                    logger.info(f"Waiting for {job['data_type']} job {job['job_id']} to complete...")
+                    result = await flowhub_adapter.wait_for_job_completion(job["job_id"], timeout=job["timeout"])
+                    status = str(result.get("status") or "unknown")
+                    completed.append({**job, "status": status})
 
-                # 检查任务状态
-                industry_status = industry_result.get('status')
-                concept_status = concept_result.get('status')
+                success_jobs = [job for job in completed if self._is_success_status(job.get("status"))]
+                failed_jobs = [job for job in completed if not self._is_success_status(job.get("status"))]
 
-                if self._is_success_status(industry_status) and self._is_success_status(concept_status):
-                    logger.info(f"Board data fetch jobs completed successfully")
+                if not failed_jobs:
+                    logger.info("Board/structure data fetch jobs completed successfully")
                     self._record_task_execution(
                         "daily_board_fetch",
                         "completed",
-                        f"Industry: {industry_job_id}, Concept: {concept_job_id}"
+                        ", ".join(f"{job['data_type']}:{job['job_id']}" for job in completed),
                     )
-                    await self._notify_data_fetch_completed([
-                        'industry_board_data_fetch',
-                        'concept_board_data_fetch'
-                    ])
                 else:
-                    logger.warning(f"Board data fetch jobs finished with status: Industry={industry_status}, Concept={concept_status}")
+                    logger.warning(
+                        "Board/structure data fetch jobs finished with partial failures: "
+                        + ", ".join(f"{job['data_type']}={job['status']}" for job in completed)
+                    )
                     self._record_task_execution(
                         "daily_board_fetch",
                         "partial",
-                        f"Industry: {industry_status}, Concept: {concept_status}"
+                        ", ".join(f"{job['data_type']}={job['status']}" for job in completed),
                     )
-                    tasks_to_notify = []
-                    if self._is_success_status(industry_status):
-                        tasks_to_notify.append('industry_board_data_fetch')
-                    if self._is_success_status(concept_status):
-                        tasks_to_notify.append('concept_board_data_fetch')
-                    if tasks_to_notify:
-                        await self._notify_data_fetch_completed(tasks_to_notify)
+
+                tasks_to_notify = [job["notify_key"] for job in success_jobs if job.get("notify_key")]
+                if tasks_to_notify:
+                    await self._notify_data_fetch_completed(tasks_to_notify)
             else:
                 logger.warning("FlowhubAdapter not available, skipping board data fetch")
                 self._record_task_execution("daily_board_fetch", "skipped", "FlowhubAdapter not available")

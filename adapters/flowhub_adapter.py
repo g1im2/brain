@@ -94,23 +94,46 @@ class FlowhubAdapter(ISystemAdapter):
         response = await self._http_client.post(f'/api/v1/tasks/{task_id}/run')
         return response.get('data') or response
 
-    async def ensure_task(self, name: str, data_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def ensure_task(
+        self,
+        name: str,
+        data_type: str,
+        params: Dict[str, Any],
+        schedule_type: Optional[str] = None,
+        schedule_value: Any = None,
+        enabled: Optional[bool] = None,
+        allow_overlap: Optional[bool] = None,
+    ) -> Dict[str, Any]:
         """确保 Flowhub 中存在指定名称的任务"""
         tasks = await self.list_tasks()
         for task in tasks:
             if task.get('name') == name:
                 current_params = task.get('params') if isinstance(task.get('params'), dict) else {}
                 current_data_type = task.get('data_type')
-                needs_update = (current_data_type != data_type) or (current_params != (params or {}))
+                desired_schedule_type = schedule_type if schedule_type is not None else task.get('schedule_type', 'manual')
+                if schedule_type is not None or schedule_value is not None:
+                    desired_schedule_value = schedule_value
+                else:
+                    desired_schedule_value = task.get('schedule_value')
+                desired_enabled = bool(enabled) if enabled is not None else bool(task.get('enabled', True))
+                desired_allow_overlap = bool(allow_overlap) if allow_overlap is not None else bool(task.get('allow_overlap', False))
+                needs_update = (
+                    (current_data_type != data_type)
+                    or (current_params != (params or {}))
+                    or (task.get('schedule_type') != desired_schedule_type)
+                    or (task.get('schedule_value') != desired_schedule_value)
+                    or (bool(task.get('enabled', True)) != desired_enabled)
+                    or (bool(task.get('allow_overlap', False)) != desired_allow_overlap)
+                )
                 if needs_update:
                     payload = {
                         'name': name,
                         'data_type': data_type,
                         'params': params or {},
-                        'schedule_type': task.get('schedule_type', 'manual'),
-                        'schedule_value': task.get('schedule_value'),
-                        'enabled': task.get('enabled', True),
-                        'allow_overlap': task.get('allow_overlap', False)
+                        'schedule_type': desired_schedule_type,
+                        'schedule_value': desired_schedule_value,
+                        'enabled': desired_enabled,
+                        'allow_overlap': desired_allow_overlap,
                     }
                     response = await self._http_client.put(f"/api/v1/tasks/{task.get('task_id')}", data=payload)
                     return response.get('data') or response
@@ -120,9 +143,10 @@ class FlowhubAdapter(ISystemAdapter):
             'name': name,
             'data_type': data_type,
             'params': params,
-            'schedule_type': 'manual',
-            'schedule_value': None,
-            'enabled': True
+            'schedule_type': schedule_type if schedule_type is not None else 'manual',
+            'schedule_value': schedule_value,
+            'enabled': bool(enabled) if enabled is not None else True,
+            'allow_overlap': bool(allow_overlap) if allow_overlap is not None else False,
         }
         return await self.create_task(payload)
 

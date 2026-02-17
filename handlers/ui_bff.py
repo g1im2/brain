@@ -337,6 +337,17 @@ class UIBffHandler(BaseHandler):
                 {"data_type": "macro_calendar_data", "label": "宏观日历"},
             ],
         },
+        "structure_rotation": {
+            "label": "结构与轮动",
+            "data_types": [
+                {"data_type": "industry_board", "label": "行业板块行情"},
+                {"data_type": "concept_board", "label": "概念板块行情"},
+                {"data_type": "industry_board_stocks", "label": "行业板块成分股"},
+                {"data_type": "concept_board_stocks", "label": "概念板块成分股"},
+                {"data_type": "industry_moneyflow_data", "label": "行业资金流"},
+                {"data_type": "batch_daily_basic", "label": "个股日线基础"},
+            ],
+        },
     }
 
     READINESS_LABELS = {
@@ -357,6 +368,33 @@ class UIBffHandler(BaseHandler):
         "industrial_data": {"schedule_type": "cron", "schedule_value": "25 19 1 * *"},
         "sentiment_index_data": {"schedule_type": "cron", "schedule_value": "30 19 1 * *"},
         "gdp_data": {"schedule_type": "cron", "schedule_value": "40 19 15 1,4,7,10 *"},
+    }
+
+    STRUCTURE_ROTATION_TEMPLATE_SCHEDULES = {
+        "industry_board": {"schedule_type": "cron", "schedule_value": "10 16 * * 1-5"},
+        "concept_board": {"schedule_type": "cron", "schedule_value": "20 16 * * 1-5"},
+        "industry_board_stocks": {"schedule_type": "cron", "schedule_value": "40 16 * * 1-5"},
+        "concept_board_stocks": {"schedule_type": "cron", "schedule_value": "55 16 * * 1-5"},
+        "industry_moneyflow_data": {"schedule_type": "cron", "schedule_value": "10 17 * * 1-5"},
+        "batch_daily_basic": {"schedule_type": "cron", "schedule_value": "30 17 * * 1-5"},
+    }
+
+    STRUCTURE_ROTATION_TEMPLATE_NAMES = {
+        "industry_board": "模板·结构与轮动·行业板块行情",
+        "concept_board": "模板·结构与轮动·概念板块行情",
+        "industry_board_stocks": "模板·结构与轮动·行业板块成分股",
+        "concept_board_stocks": "模板·结构与轮动·概念板块成分股",
+        "industry_moneyflow_data": "模板·结构与轮动·行业资金流",
+        "batch_daily_basic": "模板·结构与轮动·个股日线基础",
+    }
+
+    STRUCTURE_ROTATION_TEMPLATE_PARAMS = {
+        "industry_board": {"source": "ths", "update_mode": "full_update"},
+        "concept_board": {"source": "ths", "update_mode": "full_update"},
+        "industry_board_stocks": {"source": "ths", "update_mode": "full_update"},
+        "concept_board_stocks": {"source": "ths", "update_mode": "full_update"},
+        "industry_moneyflow_data": {"source": "ths", "incremental": True},
+        "batch_daily_basic": {"incremental": True},
     }
 
     def __init__(self):
@@ -606,6 +644,41 @@ class UIBffHandler(BaseHandler):
             )
         return templates
 
+    def _build_structure_rotation_default_templates(self) -> list[Dict[str, Any]]:
+        templates: list[Dict[str, Any]] = []
+        structure_cfg = self.DATA_READINESS_REQUIREMENTS.get("structure_rotation") or {}
+        data_items = structure_cfg.get("data_types") if isinstance(structure_cfg.get("data_types"), list) else []
+        for item in data_items:
+            if not isinstance(item, dict):
+                continue
+            data_type = str(item.get("data_type") or "").strip().lower()
+            if not data_type:
+                continue
+            data_label = str(item.get("label") or data_type).strip() or data_type
+            schedule = self.STRUCTURE_ROTATION_TEMPLATE_SCHEDULES.get(
+                data_type,
+                {"schedule_type": "cron", "schedule_value": "0 17 * * 1-5"},
+            )
+            default_params = self.STRUCTURE_ROTATION_TEMPLATE_PARAMS.get(data_type, {"incremental": True})
+            templates.append(
+                {
+                    "name": self.STRUCTURE_ROTATION_TEMPLATE_NAMES.get(
+                        data_type,
+                        f"模板·结构与轮动·{data_label}",
+                    ),
+                    "data_type": data_type,
+                    "schedule_type": schedule.get("schedule_type", "cron"),
+                    "schedule_value": schedule.get("schedule_value", "0 17 * * 1-5"),
+                    "enabled": True,
+                    "allow_overlap": False,
+                    "params": {
+                        "data_type": data_type,
+                        **default_params,
+                    },
+                }
+            )
+        return templates
+
     async def _ensure_macro_cycle_default_pipelines(
         self,
         request: web.Request,
@@ -624,7 +697,10 @@ class UIBffHandler(BaseHandler):
                     continue
                 tasks_by_type.setdefault(token, []).append(task)
 
-            templates = self._build_macro_cycle_default_templates()
+            templates = [
+                *self._build_macro_cycle_default_templates(),
+                *self._build_structure_rotation_default_templates(),
+            ]
             for template in templates:
                 data_type = str(template.get("data_type") or "").strip().lower()
                 if not data_type:
@@ -994,6 +1070,7 @@ class UIBffHandler(BaseHandler):
 
         market_related = [item for item in dataset_items if item.get("page_key") == "market_snapshot"]
         macro_related = [item for item in dataset_items if item.get("page_key") == "macro_cycle"]
+        structure_related = [item for item in dataset_items if item.get("page_key") == "structure_rotation"]
 
         market_state = "waiting_schedule"
         market_detail = "市场快照接口可达，但尚无可用数据。"
@@ -1107,11 +1184,11 @@ class UIBffHandler(BaseHandler):
         structure_state, structure_detail = _apply_related_override(
             structure_state,
             structure_detail,
-            macro_related,
-            fetching_detail="宏观链路正在抓取，结构与轮动结果待生成。",
-            failed_detail="宏观链路任务失败，结构与轮动暂不可用。",
-            missing_detail="宏观关键任务未配置，结构与轮动暂不可用。",
-            no_data_detail="宏观关键抓取任务近期无有效入库数据，结构结果可能不完整。",
+            [*structure_related, *macro_related],
+            fetching_detail="结构或宏观链路正在抓取，结构与轮动结果待生成。",
+            failed_detail="结构或宏观链路任务失败，结构与轮动暂不可用。",
+            missing_detail="结构或宏观关键任务未配置，结构与轮动暂不可用。",
+            no_data_detail="结构或宏观关键抓取任务近期无有效入库数据，结构结果可能不完整。",
         )
         _append_page_check(
             page_key="structure_rotation",
@@ -1247,12 +1324,12 @@ class UIBffHandler(BaseHandler):
                 if isinstance(item, dict):
                     errors.append(
                         {
-                            "source": "macro_cycle_templates",
+                            "source": "flowhub_default_templates",
                             "message": f"{item.get('stage') or 'unknown'}::{item.get('data_type') or '-'}::{item.get('message') or '-'}",
                         }
                     )
         except Exception as exc:
-            errors.append({"source": "macro_cycle_templates", "message": str(exc)})
+            errors.append({"source": "flowhub_default_templates", "message": str(exc)})
 
         jobs_by_type: Dict[str, list[Dict[str, Any]]] = {}
         for job in flowhub_jobs:
@@ -1843,7 +1920,7 @@ class UIBffHandler(BaseHandler):
         try:
             _, template_bootstrap = await self._ensure_macro_cycle_default_pipelines(request)
         except Exception as exc:
-            self.logger.warning(f"ensure macro cycle default pipelines failed: {exc}")
+            self.logger.warning(f"ensure default pipelines failed: {exc}")
         all_tasks = await self._list_flowhub_tasks(request, limit=2000, offset=0)
         page_items = all_tasks[safe_offset : safe_offset + safe_limit]
         return self.success_response(
