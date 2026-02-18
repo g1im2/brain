@@ -345,6 +345,7 @@ class UIBffHandler(BaseHandler):
                 {"data_type": "industry_board_stocks", "label": "行业板块成分股"},
                 {"data_type": "concept_board_stocks", "label": "概念板块成分股"},
                 {"data_type": "industry_moneyflow_data", "label": "行业资金流"},
+                {"data_type": "concept_moneyflow_data", "label": "概念资金流"},
                 {"data_type": "batch_daily_basic", "label": "个股日线基础"},
             ],
         },
@@ -376,6 +377,7 @@ class UIBffHandler(BaseHandler):
         "industry_board_stocks": {"schedule_type": "cron", "schedule_value": "40 16 * * 1-5"},
         "concept_board_stocks": {"schedule_type": "cron", "schedule_value": "55 16 * * 1-5"},
         "industry_moneyflow_data": {"schedule_type": "cron", "schedule_value": "10 17 * * 1-5"},
+        "concept_moneyflow_data": {"schedule_type": "cron", "schedule_value": "15 17 * * 1-5"},
         "batch_daily_basic": {"schedule_type": "cron", "schedule_value": "30 17 * * 1-5"},
     }
 
@@ -385,6 +387,7 @@ class UIBffHandler(BaseHandler):
         "industry_board_stocks": "模板·结构与轮动·行业板块成分股",
         "concept_board_stocks": "模板·结构与轮动·概念板块成分股",
         "industry_moneyflow_data": "模板·结构与轮动·行业资金流",
+        "concept_moneyflow_data": "模板·结构与轮动·概念资金流",
         "batch_daily_basic": "模板·结构与轮动·个股日线基础",
     }
 
@@ -394,6 +397,7 @@ class UIBffHandler(BaseHandler):
         "industry_board_stocks": {"source": "ths", "update_mode": "full_update"},
         "concept_board_stocks": {"source": "ths", "update_mode": "full_update"},
         "industry_moneyflow_data": {"source": "ths", "incremental": True},
+        "concept_moneyflow_data": {"source": "em", "incremental": True},
         "batch_daily_basic": {"incremental": True},
     }
 

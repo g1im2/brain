@@ -43,6 +43,7 @@ class IntegrationScheduler:
         "brain_industry_board_stocks_fetch": "40 16 * * 1-5",
         "brain_concept_board_stocks_fetch": "55 16 * * 1-5",
         "brain_industry_moneyflow_fetch": "10 17 * * 1-5",
+        "brain_concept_moneyflow_fetch": "15 17 * * 1-5",
         "brain_batch_daily_basic_fetch": "30 17 * * 1-5",
     }
 
@@ -1466,6 +1467,19 @@ class IntegrationScheduler:
                         "notify_key": "industry_moneyflow_data_fetch",
                         "schedule_type": "cron",
                         "schedule_value": self.STRUCTURE_FLOWHUB_CRON_TEMPLATES["brain_industry_moneyflow_fetch"],
+                        "timeout": 21600,
+                    },
+                    {
+                        "name": "brain_concept_moneyflow_fetch",
+                        "data_type": "concept_moneyflow_data",
+                        "params": {
+                            "data_type": "concept_moneyflow_data",
+                            "source": "em",
+                            "incremental": True,
+                        },
+                        "notify_key": "concept_moneyflow_data_fetch",
+                        "schedule_type": "cron",
+                        "schedule_value": self.STRUCTURE_FLOWHUB_CRON_TEMPLATES["brain_concept_moneyflow_fetch"],
                         "timeout": 21600,
                     },
                     {
