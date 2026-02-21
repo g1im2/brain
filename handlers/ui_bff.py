@@ -401,6 +401,16 @@ class UIBffHandler(BaseHandler):
         "batch_daily_basic": {"incremental": True},
     }
 
+    STRUCTURE_ROTATION_REAL_DATA_TABLES = {
+        "industry_board": {"table": "industry_board_daily_data", "date_column": "trade_date"},
+        "concept_board": {"table": "concept_board_daily_data", "date_column": "trade_date"},
+        "industry_board_stocks": {"table": "industry_board_stocks", "date_column": "join_date"},
+        "concept_board_stocks": {"table": "concept_board_stocks", "date_column": "join_date"},
+        "industry_moneyflow_data": {"table": "industry_moneyflow_daily", "date_column": "trade_date"},
+        "concept_moneyflow_data": {"table": "concept_moneyflow_daily", "date_column": "trade_date"},
+        "batch_daily_basic": {"table": "stock_daily_basic", "date_column": "trade_date"},
+    }
+
     def __init__(self):
         super().__init__()
         self._system_api = None
@@ -558,6 +568,64 @@ class UIBffHandler(BaseHandler):
             return int(value)
         except Exception:
             return default
+
+    @staticmethod
+    def _normalize_ymd(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+            return text[:10]
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            return dt.date().isoformat()
+        except Exception:
+            return None
+
+    async def _load_structure_real_data_freshness(self) -> Dict[str, Dict[str, Any]]:
+        try:
+            api = self._get_system_api()
+            db_manager = getattr(api, "db_manager", None)
+            if db_manager is None:
+                return {}
+        except Exception as exc:
+            self.logger.warning(f"load structure real data freshness failed (db unavailable): {exc}")
+            return {}
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for data_type, mapping in self.STRUCTURE_ROTATION_REAL_DATA_TABLES.items():
+            table_name = str(mapping.get("table") or "").strip()
+            date_column = str(mapping.get("date_column") or "").strip()
+            if not table_name or not date_column:
+                continue
+            try:
+                latest_rows = await asyncio.to_thread(
+                    db_manager.execute_custom_query,
+                    f"SELECT TO_CHAR(MAX({date_column}), 'YYYY-MM-DD') AS latest_date FROM {table_name}",
+                    {},
+                )
+                latest_date = self._normalize_ymd((latest_rows or [{}])[0].get("latest_date"))
+                rows_on_latest = 0
+                if latest_date:
+                    count_rows = await asyncio.to_thread(
+                        db_manager.execute_custom_query,
+                        f"SELECT COUNT(*) AS rows_on_latest FROM {table_name} WHERE {date_column} = :latest_date",
+                        {"latest_date": latest_date},
+                    )
+                    rows_on_latest = self._safe_int((count_rows or [{}])[0].get("rows_on_latest"), 0)
+                result[data_type] = {
+                    "table": table_name,
+                    "date_column": date_column,
+                    "latest_date": latest_date,
+                    "rows_on_latest": rows_on_latest,
+                }
+            except Exception as exc:
+                self.logger.warning(
+                    f"load structure data freshness failed: data_type={data_type}, table={table_name}, error={exc}"
+                )
+        return result
 
     @staticmethod
     def _coerce_bool(value: Any) -> bool:
@@ -1019,6 +1087,8 @@ class UIBffHandler(BaseHandler):
             "latest_saved_count": latest_saved_count,
             "latest_records_count": latest_records_count,
             "history_has_data": history_has_data,
+            "latest_data_date": None,
+            "last_fetch_status": latest_status or task_last_status or "",
             "pipeline_task_id": selected_task.get("task_id"),
             "pipeline_enabled": self._coerce_bool(selected_task.get("enabled")) if selected_task else False,
             "pipeline_schedule_type": schedule_type,
@@ -1349,6 +1419,8 @@ class UIBffHandler(BaseHandler):
                 continue
             tasks_by_type.setdefault(token, []).append(task)
 
+        structure_freshness = await self._load_structure_real_data_freshness()
+
         items: list[Dict[str, Any]] = []
         for page_key, page_config in self.DATA_READINESS_REQUIREMENTS.items():
             page_label = str(page_config.get("label") or page_key)
@@ -1360,17 +1432,32 @@ class UIBffHandler(BaseHandler):
                 if not data_type:
                     continue
                 data_label = str(item.get("label") or data_type)
-                items.append(
-                    self._assess_requirement_status(
-                        page_key=page_key,
-                        page_label=page_label,
-                        data_type=data_type,
-                        data_label=data_label,
-                        jobs_by_type=jobs_by_type,
-                        pipelines_by_type=tasks_by_type,
-                        now_ts=now_ts,
-                    )
+                assessed = self._assess_requirement_status(
+                    page_key=page_key,
+                    page_label=page_label,
+                    data_type=data_type,
+                    data_label=data_label,
+                    jobs_by_type=jobs_by_type,
+                    pipelines_by_type=tasks_by_type,
+                    now_ts=now_ts,
                 )
+                if page_key == "structure_rotation":
+                    freshness = structure_freshness.get(data_type, {})
+                    latest_data_date = self._normalize_ymd(freshness.get("latest_date"))
+                    rows_on_latest = self._safe_int(freshness.get("rows_on_latest"), 0)
+                    if latest_data_date:
+                        assessed["latest_data_date"] = latest_data_date
+                        assessed["latest_data_rows"] = rows_on_latest
+                        assessed["history_has_data"] = True
+                        if str(assessed.get("state") or "") == "no_data":
+                            assessed["state"] = "ready"
+                            assessed["state_label"] = self._resolve_readiness_state_label("ready")
+                            assessed["detail"] = (
+                                f"已检测到真实入库数据（{freshness.get('table')}），最新日期 {latest_data_date}。"
+                            )
+                        if not str(assessed.get("last_fetch_status") or "").strip():
+                            assessed["last_fetch_status"] = "has_data"
+                items.append(assessed)
 
         page_checks = await self._build_data_page_checks(request, items)
         all_states = [str(item.get("state") or "unknown") for item in [*items, *page_checks]]
