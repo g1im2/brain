@@ -401,7 +401,18 @@ class UIBffHandler(BaseHandler):
         "batch_daily_basic": {"incremental": True},
     }
 
-    STRUCTURE_ROTATION_REAL_DATA_TABLES = {
+    READINESS_REAL_DATA_TABLES = {
+        "stock_index_data": {"table": "macro_stock_index_data", "date_column": "date", "value_kind": "date"},
+        "market_flow_data": {"table": "macro_market_flow_data", "date_column": "date", "value_kind": "date"},
+        "interest_rate_data": {"table": "macro_interest_rate_data", "date_column": "date", "value_kind": "date"},
+        "commodity_price_data": {"table": "macro_commodity_price_data", "date_column": "date", "value_kind": "date"},
+        "price_index_data": {"table": "macro_price_index_data", "date_column": "month", "value_kind": "date"},
+        "money_supply_data": {"table": "macro_money_supply_data", "date_column": "month", "value_kind": "period"},
+        "social_financing_data": {"table": "macro_social_financing_data", "date_column": "month", "value_kind": "period"},
+        "industrial_data": {"table": "macro_industrial_data", "date_column": "month", "value_kind": "period"},
+        "sentiment_index_data": {"table": "macro_sentiment_index_data", "date_column": "month", "value_kind": "date"},
+        "gdp_data": {"table": "macro_gdp_data", "date_column": "quarter", "value_kind": "period"},
+        "macro_calendar_data": {"table": "macro_calendar_events", "date_column": "event_date", "value_kind": "date"},
         "industry_board": {"table": "industry_board_daily_data", "date_column": "trade_date"},
         "concept_board": {"table": "concept_board_daily_data", "date_column": "trade_date"},
         "industry_board_stocks": {"table": "industry_board_stocks", "date_column": "join_date"},
@@ -584,40 +595,71 @@ class UIBffHandler(BaseHandler):
         except Exception:
             return None
 
-    async def _load_structure_real_data_freshness(self) -> Dict[str, Dict[str, Any]]:
+    @staticmethod
+    def _normalize_period(value: Any) -> Optional[str]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        ymd = UIBffHandler._normalize_ymd(text)
+        if ymd:
+            return ymd
+        if re.fullmatch(r"\d{6}", text):
+            return f"{text[0:4]}-{text[4:6]}"
+        if re.fullmatch(r"\d{8}", text):
+            return f"{text[0:4]}-{text[4:6]}-{text[6:8]}"
+        if re.fullmatch(r"\d{4}Q[1-4]", text.upper()):
+            return text.upper()
+        if re.fullmatch(r"\d{4}-Q[1-4]", text.upper()):
+            return text.upper()
+        return text
+
+    async def _load_readiness_real_data_freshness(self) -> Dict[str, Dict[str, Any]]:
         try:
             api = self._get_system_api()
             db_manager = getattr(api, "db_manager", None)
             if db_manager is None:
                 return {}
         except Exception as exc:
-            self.logger.warning(f"load structure real data freshness failed (db unavailable): {exc}")
+            self.logger.warning(f"load readiness real data freshness failed (db unavailable): {exc}")
             return {}
 
         result: Dict[str, Dict[str, Any]] = {}
-        for data_type, mapping in self.STRUCTURE_ROTATION_REAL_DATA_TABLES.items():
+        for data_type, mapping in self.READINESS_REAL_DATA_TABLES.items():
             table_name = str(mapping.get("table") or "").strip()
             date_column = str(mapping.get("date_column") or "").strip()
+            value_kind = str(mapping.get("value_kind") or "date").strip().lower()
             if not table_name or not date_column:
                 continue
             try:
+                if value_kind == "period":
+                    latest_sql = f"SELECT MAX({date_column})::text AS latest_date FROM {table_name}"
+                else:
+                    latest_sql = f"SELECT TO_CHAR(MAX({date_column}), 'YYYY-MM-DD') AS latest_date FROM {table_name}"
                 latest_rows = await asyncio.to_thread(
                     db_manager.execute_custom_query,
-                    f"SELECT TO_CHAR(MAX({date_column}), 'YYYY-MM-DD') AS latest_date FROM {table_name}",
+                    latest_sql,
                     {},
                 )
-                latest_date = self._normalize_ymd((latest_rows or [{}])[0].get("latest_date"))
+                raw_latest = (latest_rows or [{}])[0].get("latest_date")
+                latest_date = self._normalize_period(raw_latest) if value_kind == "period" else self._normalize_ymd(raw_latest)
                 rows_on_latest = 0
                 if latest_date:
+                    if value_kind == "period":
+                        count_sql = f"SELECT COUNT(*) AS rows_on_latest FROM {table_name} WHERE {date_column} = :latest_value"
+                        params = {"latest_value": raw_latest}
+                    else:
+                        count_sql = f"SELECT COUNT(*) AS rows_on_latest FROM {table_name} WHERE {date_column} = :latest_date"
+                        params = {"latest_date": latest_date}
                     count_rows = await asyncio.to_thread(
                         db_manager.execute_custom_query,
-                        f"SELECT COUNT(*) AS rows_on_latest FROM {table_name} WHERE {date_column} = :latest_date",
-                        {"latest_date": latest_date},
+                        count_sql,
+                        params,
                     )
                     rows_on_latest = self._safe_int((count_rows or [{}])[0].get("rows_on_latest"), 0)
                 result[data_type] = {
                     "table": table_name,
                     "date_column": date_column,
+                    "value_kind": value_kind,
                     "latest_date": latest_date,
                     "rows_on_latest": rows_on_latest,
                 }
@@ -1112,13 +1154,16 @@ class UIBffHandler(BaseHandler):
             missing_detail: str,
             no_data_detail: str,
         ) -> tuple[str, str]:
-            if any(str(item.get("state")) == "fetching" for item in related_items):
+            states = [str(item.get("state") or "").strip().lower() for item in related_items]
+            if any(item_state == "fetching" for item_state in states):
                 return "fetching", fetching_detail
-            if any(str(item.get("state")) == "failed" for item in related_items):
+            if any(item_state == "failed" for item_state in states):
                 return "failed", failed_detail
-            if any(str(item.get("state")) == "missing_task" for item in related_items):
+            if any(item_state == "missing_task" for item_state in states):
                 return "missing_task", missing_detail
-            if any(str(item.get("state")) == "no_data" for item in related_items):
+            no_data_count = sum(1 for item_state in states if item_state == "no_data")
+            has_ready = any(item_state == "ready" for item_state in states)
+            if no_data_count > 0 and not has_ready:
                 return "no_data", no_data_detail
             return state, detail
 
@@ -1419,7 +1464,7 @@ class UIBffHandler(BaseHandler):
                 continue
             tasks_by_type.setdefault(token, []).append(task)
 
-        structure_freshness = await self._load_structure_real_data_freshness()
+        readiness_freshness = await self._load_readiness_real_data_freshness()
 
         items: list[Dict[str, Any]] = []
         for page_key, page_config in self.DATA_READINESS_REQUIREMENTS.items():
@@ -1441,22 +1486,21 @@ class UIBffHandler(BaseHandler):
                     pipelines_by_type=tasks_by_type,
                     now_ts=now_ts,
                 )
-                if page_key == "structure_rotation":
-                    freshness = structure_freshness.get(data_type, {})
-                    latest_data_date = self._normalize_ymd(freshness.get("latest_date"))
-                    rows_on_latest = self._safe_int(freshness.get("rows_on_latest"), 0)
-                    if latest_data_date:
-                        assessed["latest_data_date"] = latest_data_date
-                        assessed["latest_data_rows"] = rows_on_latest
-                        assessed["history_has_data"] = True
-                        if str(assessed.get("state") or "") == "no_data":
-                            assessed["state"] = "ready"
-                            assessed["state_label"] = self._resolve_readiness_state_label("ready")
-                            assessed["detail"] = (
-                                f"已检测到真实入库数据（{freshness.get('table')}），最新日期 {latest_data_date}。"
-                            )
-                        if not str(assessed.get("last_fetch_status") or "").strip():
-                            assessed["last_fetch_status"] = "has_data"
+                freshness = readiness_freshness.get(data_type, {})
+                latest_data_date = self._normalize_period(freshness.get("latest_date"))
+                rows_on_latest = self._safe_int(freshness.get("rows_on_latest"), 0)
+                if latest_data_date:
+                    assessed["latest_data_date"] = latest_data_date
+                    assessed["latest_data_rows"] = rows_on_latest
+                    assessed["history_has_data"] = True
+                    if str(assessed.get("state") or "") == "no_data":
+                        assessed["state"] = "ready"
+                        assessed["state_label"] = self._resolve_readiness_state_label("ready")
+                        assessed["detail"] = (
+                            f"已检测到真实入库数据（{freshness.get('table')}），最新日期 {latest_data_date}。"
+                        )
+                    if not str(assessed.get("last_fetch_status") or "").strip():
+                        assessed["last_fetch_status"] = "has_data"
                 items.append(assessed)
 
         page_checks = await self._build_data_page_checks(request, items)
