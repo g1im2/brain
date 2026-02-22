@@ -44,6 +44,7 @@ class TaskOrchestrator:
             "ui_candidates_mark_read",
             "ui_candidates_watchlist_update",
             "ui_candidates_sync_from_analysis",
+            "ui_candidates_backfill_metadata",
             "ui_research_decision",
             "ui_research_freeze",
             "ui_research_compare",

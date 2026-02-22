@@ -166,6 +166,7 @@ class UIBffHandler(BaseHandler):
         RouteSpec("GET", re.compile(r"^/api/v1/ui/structure-rotation/policy/diff$"), "macro"),
         RouteSpec("GET", re.compile(r"^/api/v1/ui/candidates/clusters$"), "execution"),
         RouteSpec("GET", re.compile(r"^/api/v1/ui/candidates/events$"), "execution"),
+        RouteSpec("GET", re.compile(r"^/api/v1/ui/candidates/audit/report$"), "execution"),
         RouteSpec(
             "POST",
             re.compile(r"^/api/v1/ui/candidates/history/query$"),
@@ -181,6 +182,13 @@ class UIBffHandler(BaseHandler):
             "execution",
             True,
             "ui_candidates_sync_from_analysis",
+        ),
+        RouteSpec(
+            "POST",
+            re.compile(r"^/api/v1/ui/candidates/backfill$"),
+            "execution",
+            True,
+            "ui_candidates_backfill_metadata",
         ),
         RouteSpec(
             "POST",
@@ -349,6 +357,16 @@ class UIBffHandler(BaseHandler):
                 {"data_type": "batch_daily_basic", "label": "个股日线基础"},
             ],
         },
+        "watchlist": {
+            "label": "候选池",
+            "data_types": [
+                {"data_type": "batch_daily_ohlc", "label": "个股日线行情"},
+                {"data_type": "batch_daily_basic", "label": "个股日线基础"},
+                {"data_type": "adj_factors", "label": "复权因子"},
+                {"data_type": "industry_board_stocks", "label": "行业板块成分股"},
+                {"data_type": "industry_moneyflow_data", "label": "行业资金流"},
+            ],
+        },
     }
 
     READINESS_LABELS = {
@@ -401,6 +419,30 @@ class UIBffHandler(BaseHandler):
         "batch_daily_basic": {"incremental": True},
     }
 
+    WATCHLIST_TEMPLATE_SCHEDULES = {
+        "batch_daily_ohlc": {"schedule_type": "cron", "schedule_value": "10 17 * * 1-5"},
+        "batch_daily_basic": {"schedule_type": "cron", "schedule_value": "30 17 * * 1-5"},
+        "adj_factors": {"schedule_type": "cron", "schedule_value": "45 17 * * 1-5"},
+        "industry_board_stocks": {"schedule_type": "cron", "schedule_value": "40 16 * * 1-5"},
+        "industry_moneyflow_data": {"schedule_type": "cron", "schedule_value": "10 17 * * 1-5"},
+    }
+
+    WATCHLIST_TEMPLATE_NAMES = {
+        "batch_daily_ohlc": "模板·候选池·个股日线行情",
+        "batch_daily_basic": "模板·候选池·个股日线基础",
+        "adj_factors": "模板·候选池·复权因子",
+        "industry_board_stocks": "模板·候选池·行业板块成分股",
+        "industry_moneyflow_data": "模板·候选池·行业资金流",
+    }
+
+    WATCHLIST_TEMPLATE_PARAMS = {
+        "batch_daily_ohlc": {"incremental": True},
+        "batch_daily_basic": {"incremental": True},
+        "adj_factors": {"update_mode": "incremental"},
+        "industry_board_stocks": {"source": "ths", "update_mode": "incremental"},
+        "industry_moneyflow_data": {"source": "ths", "incremental": True},
+    }
+
     READINESS_REAL_DATA_TABLES = {
         "stock_index_data": {"table": "macro_stock_index_data", "date_column": "date", "value_kind": "date"},
         "market_flow_data": {"table": "macro_market_flow_data", "date_column": "date", "value_kind": "date"},
@@ -419,7 +461,9 @@ class UIBffHandler(BaseHandler):
         "concept_board_stocks": {"table": "concept_board_stocks", "date_column": "join_date"},
         "industry_moneyflow_data": {"table": "industry_moneyflow_daily", "date_column": "trade_date"},
         "concept_moneyflow_data": {"table": "concept_moneyflow_daily", "date_column": "trade_date"},
+        "batch_daily_ohlc": {"table": "stock_daily_data", "date_column": "trade_date"},
         "batch_daily_basic": {"table": "stock_daily_basic", "date_column": "trade_date"},
+        "adj_factors": {"table": "adj_factors", "date_column": "trade_date"},
     }
 
     def __init__(self):
@@ -793,6 +837,38 @@ class UIBffHandler(BaseHandler):
             )
         return templates
 
+    def _build_watchlist_default_templates(self) -> list[Dict[str, Any]]:
+        templates: list[Dict[str, Any]] = []
+        watchlist_cfg = self.DATA_READINESS_REQUIREMENTS.get("watchlist") or {}
+        data_items = watchlist_cfg.get("data_types") if isinstance(watchlist_cfg.get("data_types"), list) else []
+        for item in data_items:
+            if not isinstance(item, dict):
+                continue
+            data_type = str(item.get("data_type") or "").strip().lower()
+            if not data_type:
+                continue
+            data_label = str(item.get("label") or data_type).strip() or data_type
+            schedule = self.WATCHLIST_TEMPLATE_SCHEDULES.get(
+                data_type,
+                {"schedule_type": "cron", "schedule_value": "30 17 * * 1-5"},
+            )
+            default_params = self.WATCHLIST_TEMPLATE_PARAMS.get(data_type, {"incremental": True})
+            templates.append(
+                {
+                    "name": self.WATCHLIST_TEMPLATE_NAMES.get(data_type, f"模板·候选池·{data_label}"),
+                    "data_type": data_type,
+                    "schedule_type": schedule.get("schedule_type", "cron"),
+                    "schedule_value": schedule.get("schedule_value", "30 17 * * 1-5"),
+                    "enabled": True,
+                    "allow_overlap": False,
+                    "params": {
+                        "data_type": data_type,
+                        **default_params,
+                    },
+                }
+            )
+        return templates
+
     async def _ensure_macro_cycle_default_pipelines(
         self,
         request: web.Request,
@@ -814,6 +890,7 @@ class UIBffHandler(BaseHandler):
             templates = [
                 *self._build_macro_cycle_default_templates(),
                 *self._build_structure_rotation_default_templates(),
+                *self._build_watchlist_default_templates(),
             ]
             for template in templates:
                 data_type = str(template.get("data_type") or "").strip().lower()
@@ -1190,6 +1267,7 @@ class UIBffHandler(BaseHandler):
         market_related = [item for item in dataset_items if item.get("page_key") == "market_snapshot"]
         macro_related = [item for item in dataset_items if item.get("page_key") == "macro_cycle"]
         structure_related = [item for item in dataset_items if item.get("page_key") == "structure_rotation"]
+        watchlist_related = [item for item in dataset_items if item.get("page_key") == "watchlist"]
 
         market_state = "waiting_schedule"
         market_detail = "市场快照接口可达，但尚无可用数据。"
@@ -1342,6 +1420,15 @@ class UIBffHandler(BaseHandler):
         except Exception as exc:
             watchlist_state = "backend_error"
             watchlist_detail = str(exc)
+        watchlist_state, watchlist_detail = _apply_related_override(
+            watchlist_state,
+            watchlist_detail,
+            watchlist_related,
+            fetching_detail="候选池相关数据正在抓取，等待事件化与排序结果刷新。",
+            failed_detail="候选池相关抓取任务存在失败，需先修复后再同步入池。",
+            missing_detail="候选池关键抓取任务未配置，无法保证入池口径完整。",
+            no_data_detail="候选池相关抓取任务无有效新数据，候选事件可能已过期。",
+        )
         _append_page_check(
             page_key="watchlist",
             page_label="候选池页面",
@@ -1648,6 +1735,58 @@ class UIBffHandler(BaseHandler):
 
         items = items[: max(limit, 1)]
         return self.success_response({"items": items, "total": len(items), "scope": scope, "query": q})
+
+    async def _handle_candidate_analyzers(self, request: web.Request) -> web.Response:
+        try:
+            payload = await self._fetch_upstream_json(request, "execution", "/api/v1/analyze/capabilities")
+            data = self._unwrap_response_data(payload)
+            raw_items = data.get("analyzers") if isinstance(data.get("analyzers"), list) else []
+            items: list[Dict[str, Any]] = []
+            for row in raw_items:
+                if not isinstance(row, dict):
+                    continue
+                analyzer_id = str(row.get("name") or "").strip()
+                if not analyzer_id:
+                    continue
+                items.append(
+                    {
+                        "id": analyzer_id,
+                        "name": analyzer_id,
+                        "display_name": str(row.get("display_name") or analyzer_id).strip() or analyzer_id,
+                        "description": str(row.get("description") or "").strip(),
+                        "version": str(row.get("version") or "").strip(),
+                        "supported_signals": (
+                            [str(item).strip() for item in row.get("supported_signals", []) if str(item).strip()]
+                            if isinstance(row.get("supported_signals"), list)
+                            else []
+                        ),
+                        "config": row.get("config") if isinstance(row.get("config"), dict) else {},
+                    }
+                )
+            items.sort(key=lambda item: item["name"])
+            return self.success_response(
+                {
+                    "items": items,
+                    "total": len(items),
+                    "default_selected": [item["name"] for item in items],
+                }
+            )
+        except UpstreamServiceError as exc:
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": self._extract_upstream_error_message(exc),
+                    "error_code": "UPSTREAM_REQUEST_FAILED",
+                    "upstream_status": exc.status,
+                    "upstream_service": exc.service,
+                    "details": exc.error.get("raw"),
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                },
+                status=exc.status if 400 <= exc.status < 500 else 502,
+            )
+        except Exception as exc:
+            self.logger.error(f"load candidate analyzers failed: {exc}")
+            return self.error_response("Failed to load candidate analyzers", 500)
 
     async def _handle_system_jobs_overview(self, request: web.Request) -> web.Response:
         orchestrator = self.get_app_component(request, "task_orchestrator")
@@ -3033,6 +3172,8 @@ class UIBffHandler(BaseHandler):
             return await self._handle_shell_context(request)
         if method == "GET" and path == "/api/v1/ui/search":
             return await self._handle_search(request)
+        if method == "GET" and path == "/api/v1/ui/candidates/analyzers":
+            return await self._handle_candidate_analyzers(request)
 
         if method == "GET" and path == "/api/v1/ui/system/jobs/overview":
             return await self._handle_system_jobs_overview(request)

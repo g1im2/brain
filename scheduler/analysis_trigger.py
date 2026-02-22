@@ -337,6 +337,7 @@ class AnalysisTriggerScheduler:
                 # 分析完成后，将 livermore/chanlun/多指标结果按统一入池标准同步到候选池
                 sync_enabled = str(os.getenv("EXECUTION_CANDIDATE_SYNC_ENABLED", "true")).strip().lower() not in {"0", "false", "off", "no"}
                 sync_job_id = None
+                promote_job_id = None
                 if sync_enabled:
                     try:
                         sync_params = {
@@ -367,13 +368,40 @@ class AnalysisTriggerScheduler:
                             logger.info(f"候选池同步任务完成: {sync_job_id}")
                         else:
                             logger.warning(f"候选池同步触发未返回job_id: {sync_resp}")
+
+                        # 候选池同步完成后，自动推进到标的研究队列，避免 Page5 空队列。
+                        promote_enabled = str(
+                            os.getenv("EXECUTION_RESEARCH_AUTO_PROMOTE_ENABLED", "true")
+                        ).strip().lower() not in {"0", "false", "off", "no"}
+                        if promote_enabled:
+                            promote_params = {
+                                "limit": max(1, int(os.getenv("EXECUTION_RESEARCH_AUTO_PROMOTE_LIMIT", "30"))),
+                                "lookback_days": max(1, int(os.getenv("EXECUTION_RESEARCH_AUTO_PROMOTE_LOOKBACK_DAYS", "30"))),
+                                "title_prefix": os.getenv("EXECUTION_RESEARCH_AUTO_PROMOTE_TITLE_PREFIX", "候选池推送"),
+                            }
+                            promote_resp = await execution_adapter.submit_ui_job(
+                                "ui_candidates_auto_promote",
+                                params=promote_params,
+                            )
+                            promote_job_id = promote_resp.get("job_id") or promote_resp.get("task_id")
+                            if promote_job_id:
+                                await execution_adapter.wait_for_job_completion(
+                                    str(promote_job_id),
+                                    timeout=1800,
+                                    poll_interval=self.analysis_poll_interval,
+                                )
+                                logger.info(f"标的研究自动晋级完成: {promote_job_id}")
+                            else:
+                                logger.warning(f"标的研究自动晋级触发未返回job_id: {promote_resp}")
                     except Exception as sync_exc:
                         logger.error(f"候选池同步失败（不影响当次批量分析完成状态）: {sync_exc}", exc_info=True)
 
                 self._record_analysis_execution(
                     "stock_batch_analysis",
                     "completed",
-                    f"Stock batch analysis completed: {job_id}; candidate_sync_job={sync_job_id or 'n/a'}",
+                    f"Stock batch analysis completed: {job_id}; "
+                    f"candidate_sync_job={sync_job_id or 'n/a'}; "
+                    f"research_promote_job={promote_job_id or 'n/a'}",
                     job_id
                 )
                 logger.info(f"股票批量分析任务完成: {job}")
