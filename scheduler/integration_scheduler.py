@@ -132,6 +132,13 @@ class IntegrationScheduler:
             self._trigger_daily_board_fetch
         )
 
+        # 新增任务：每日收盘后生成 T+1 策略建议单
+        strategy_plan_cron = getattr(self.config.service, 'strategy_plan_generation_cron', None) or "at:18:50"
+        strategy_plan_plans = self._parse_cron_to_plans(strategy_plan_cron)
+        blueprint.task('/daily_strategy_plan_generation', plans=strategy_plan_plans)(
+            self._trigger_daily_strategy_plan_generation
+        )
+
         # 默认任务：系统健康检查（每30分钟执行一次）
         blueprint.task('/system_health_check', plans=PlansEvery([TimeUnits.MINUTES], [30]))(
             self._system_health_check
@@ -503,6 +510,8 @@ class IntegrationScheduler:
         daily_spec = self._parse_cron_spec(daily_cron) if daily_cron else {"mode": "every", "seconds": 86400}
         monthly_sw_cron = getattr(self.config.service, 'monthly_sw_industry_full_fetch_cron', None) or "at:03:20"
         monthly_sw_spec = self._parse_cron_spec(monthly_sw_cron)
+        strategy_plan_cron = getattr(self.config.service, 'strategy_plan_generation_cron', None) or "at:18:50"
+        strategy_plan_spec = self._parse_cron_spec(strategy_plan_cron)
 
         system_tasks = [
             {
@@ -538,6 +547,13 @@ class IntegrationScheduler:
                 "task_id": None,
                 "spec": daily_spec,
                 "handler": self._trigger_daily_board_fetch,
+                "handler_args": (None,)
+            },
+            {
+                "task_name": "daily_strategy_plan_generation",
+                "task_id": None,
+                "spec": strategy_plan_spec,
+                "handler": self._trigger_daily_strategy_plan_generation,
                 "handler_args": (None,)
             },
             {
@@ -1578,6 +1594,128 @@ class IntegrationScheduler:
                 except Exception as ce:
                     logger.warning(f"Failed to close FlowhubAdapter session: {ce}")
 
+    def _strategy_plan_timeout_seconds(self) -> int:
+        value = getattr(self.config.service, "strategy_plan_generation_timeout", None)
+        try:
+            timeout = int(value) if value is not None else 7200
+        except Exception:
+            timeout = 7200
+        return max(300, timeout)
+
+    def _build_strategy_plan_job_params(self, today: date) -> Dict[str, Any]:
+        lookback_days_raw = getattr(self.config.service, "strategy_plan_lookback_days", 180)
+        try:
+            lookback_days = int(lookback_days_raw)
+        except Exception:
+            lookback_days = 180
+        lookback_days = max(30, lookback_days)
+
+        initial_cash_raw = getattr(self.config.service, "strategy_plan_initial_cash", 3000000.0)
+        try:
+            initial_cash = float(initial_cash_raw)
+        except Exception:
+            initial_cash = 3000000.0
+        initial_cash = max(1000.0, initial_cash)
+
+        benchmark = str(getattr(self.config.service, "strategy_plan_benchmark", "000300.SH") or "000300.SH").strip() or "000300.SH"
+        cost = str(getattr(self.config.service, "strategy_plan_cost", "5bp") or "5bp").strip() or "5bp"
+        start_day = today - timedelta(days=lookback_days)
+        return {
+            "title": f"AutoPlan-{today.isoformat()}",
+            "subject_id": None,
+            "config": {
+                "mode": "backtest",
+                "universe": "portfolio_universe",
+                "strategy": "policy_chain_v1",
+                "from": start_day.isoformat(),
+                "to": today.isoformat(),
+                "freq": "daily",
+                "fill": "next_open",
+                "cash": initial_cash,
+                "benchmark": benchmark,
+                "cost": cost,
+                "gates": {"macro": True, "sector": True, "risk": True},
+                "constraints": {"limit": True, "halt": True, "volume": True},
+            },
+            "metadata": {
+                "source": "brain_scheduler",
+                "task": "daily_strategy_plan_generation",
+            },
+        }
+
+    @staticmethod
+    def _extract_execution_job_id(payload: Optional[Dict[str, Any]]) -> Optional[str]:
+        if not isinstance(payload, dict):
+            return None
+        candidates = [payload.get("job_id"), payload.get("task_job_id"), payload.get("task_id")]
+        job = payload.get("job")
+        if isinstance(job, dict):
+            candidates.extend([job.get("id"), job.get("job_id")])
+        for value in candidates:
+            token = str(value or "").strip()
+            if token:
+                return token
+        return None
+
+    async def _trigger_daily_strategy_plan_generation(self, context):
+        """触发每日策略计划生成（收盘后生成 T+1 建议单）。"""
+        self._mark_task_running("daily_strategy_plan_generation")
+        try:
+            today = date.today()
+            if today.weekday() >= 5:
+                self._record_task_execution(
+                    "daily_strategy_plan_generation",
+                    "skipped",
+                    f"Skip strategy plan generation on weekend ({today.isoformat()})",
+                )
+                return
+
+            execution_adapter = self.app.get("execution_adapter") if self.app else None
+            if not execution_adapter:
+                self._record_task_execution(
+                    "daily_strategy_plan_generation",
+                    "skipped",
+                    "ExecutionAdapter not available",
+                )
+                return
+
+            logger.info("Triggering daily strategy plan generation...")
+            params = self._build_strategy_plan_job_params(today)
+            submit_result = await execution_adapter.submit_ui_job("ui_strategy_report_run", params=params)
+            job_id = self._extract_execution_job_id(submit_result)
+            if not job_id:
+                self._record_task_execution(
+                    "daily_strategy_plan_generation",
+                    "failed",
+                    f"ui_strategy_report_run returned no job_id: {submit_result}",
+                )
+                return
+
+            timeout_seconds = self._strategy_plan_timeout_seconds()
+            job = await execution_adapter.wait_for_job_completion(
+                str(job_id),
+                timeout=timeout_seconds,
+                poll_interval=15,
+            )
+            status = str(job.get("status") or "")
+            if self._is_success_status(status):
+                self._record_task_execution(
+                    "daily_strategy_plan_generation",
+                    "completed",
+                    f"Strategy plan generated (job_id={job_id}, status={status})",
+                    str(job_id),
+                )
+            else:
+                self._record_task_execution(
+                    "daily_strategy_plan_generation",
+                    "failed",
+                    f"Strategy plan job finished with status={status} (job_id={job_id})",
+                    str(job_id),
+                )
+        except Exception as e:
+            logger.error(f"Daily strategy plan generation failed: {e}", exc_info=True)
+            self._record_task_execution("daily_strategy_plan_generation", "failed", str(e))
+
     async def _notify_data_fetch_completed(self, tasks: Optional[List[str]] = None):
         """通知 AnalysisTriggerScheduler 数据抓取任务已完成
 
@@ -1694,6 +1832,8 @@ class IntegrationScheduler:
                 await self._trigger_monthly_sw_industry_full_fetch(None)
             elif func == 'daily_board_fetch':
                 await self._trigger_daily_board_fetch(None)
+            elif func == 'daily_strategy_plan_generation':
+                await self._trigger_daily_strategy_plan_generation(None)
             else:
                 raise AdapterException("IntegrationScheduler", f"Unsupported custom task function: {func}")
 

@@ -291,6 +291,31 @@ class UIBffHandler(BaseHandler):
             "execution",
         ),
         RouteSpec(
+            "GET",
+            re.compile(r"^/api/v1/ui/strategy/reports/(?P<report_id>[^/]+)/positions/export$"),
+            "execution",
+        ),
+        RouteSpec(
+            "GET",
+            re.compile(r"^/api/v1/ui/strategy/reports/(?P<report_id>[^/]+)/logs$"),
+            "execution",
+        ),
+        RouteSpec(
+            "GET",
+            re.compile(r"^/api/v1/ui/strategy/reports/(?P<report_id>[^/]+)/decisions$"),
+            "execution",
+        ),
+        RouteSpec(
+            "GET",
+            re.compile(r"^/api/v1/ui/strategy/reports/(?P<report_id>[^/]+)/order-plans$"),
+            "execution",
+        ),
+        RouteSpec(
+            "GET",
+            re.compile(r"^/api/v1/ui/strategy/order-plans/latest$"),
+            "execution",
+        ),
+        RouteSpec(
             "POST",
             re.compile(r"^/api/v1/ui/execution/sim/orders$"),
             "portfolio",

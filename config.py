@@ -114,6 +114,12 @@ class ServiceConfig:
     daily_data_fetch_cron: Optional[str] = None
     monthly_sw_industry_full_fetch_cron: Optional[str] = "at:03:20"
     daily_data_fetch_timeout: int = 86400
+    strategy_plan_generation_cron: Optional[str] = "at:18:50"
+    strategy_plan_generation_timeout: int = 7200
+    strategy_plan_lookback_days: int = 180
+    strategy_plan_initial_cash: float = 3000000.0
+    strategy_plan_benchmark: str = "000300.SH"
+    strategy_plan_cost: str = "5bp"
 
     # 监控配置
     monitoring_enabled: bool = True
@@ -301,6 +307,12 @@ class IntegrationConfig:
                 'daily_data_fetch_cron': None,
                 'monthly_sw_industry_full_fetch_cron': 'at:03:20',
                 'daily_data_fetch_timeout': 86400,
+                'strategy_plan_generation_cron': 'at:18:50',
+                'strategy_plan_generation_timeout': 7200,
+                'strategy_plan_lookback_days': 180,
+                'strategy_plan_initial_cash': 3000000.0,
+                'strategy_plan_benchmark': '000300.SH',
+                'strategy_plan_cost': '5bp',
                 'monitoring_enabled': True,
                 'metrics_port': 9090,
                 'init_data_on_startup': True,
@@ -397,6 +409,12 @@ class IntegrationConfig:
             'SCHEDULER_DAILY_CRON': ('service', 'daily_data_fetch_cron', str),
             'SCHEDULER_MONTHLY_SW_FULL_CRON': ('service', 'monthly_sw_industry_full_fetch_cron', str),
             'SCHEDULER_DAILY_FETCH_TIMEOUT': ('service', 'daily_data_fetch_timeout', int),
+            'SCHEDULER_STRATEGY_PLAN_CRON': ('service', 'strategy_plan_generation_cron', str),
+            'SCHEDULER_STRATEGY_PLAN_TIMEOUT': ('service', 'strategy_plan_generation_timeout', int),
+            'SCHEDULER_STRATEGY_PLAN_LOOKBACK_DAYS': ('service', 'strategy_plan_lookback_days', int),
+            'SCHEDULER_STRATEGY_PLAN_INITIAL_CASH': ('service', 'strategy_plan_initial_cash', float),
+            'SCHEDULER_STRATEGY_PLAN_BENCHMARK': ('service', 'strategy_plan_benchmark', str),
+            'SCHEDULER_STRATEGY_PLAN_COST': ('service', 'strategy_plan_cost', str),
             'BRAIN_AUTH_ISSUER': ('service', 'auth_issuer', str),
             'BRAIN_AUTH_JWT_SECRET': ('service', 'auth_jwt_secret', str),
             'BRAIN_AUTH_ACCESS_TOKEN_TTL_SECONDS': ('service', 'auth_access_token_ttl_seconds', int),
