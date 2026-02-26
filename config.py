@@ -111,7 +111,9 @@ class ServiceConfig:
     # 定时任务配置
     scheduler_enabled: bool = True
     scheduler_timezone: str = "Asia/Shanghai"
-    daily_data_fetch_cron: Optional[str] = None
+    daily_data_fetch_cron: Optional[str] = "at:15:30"
+    daily_index_fetch_retry_interval_seconds: int = 1800
+    daily_index_fetch_retry_attempts: int = 3
     monthly_sw_industry_full_fetch_cron: Optional[str] = "at:03:20"
     daily_data_fetch_timeout: int = 86400
     strategy_plan_generation_cron: Optional[str] = "at:18:50"
@@ -304,7 +306,9 @@ class IntegrationConfig:
                 'flowhub_service_url': 'http://flowhub-service:8080',
                 'scheduler_enabled': True,
                 'scheduler_timezone': 'Asia/Shanghai',
-                'daily_data_fetch_cron': None,
+                'daily_data_fetch_cron': 'at:15:30',
+                'daily_index_fetch_retry_interval_seconds': 1800,
+                'daily_index_fetch_retry_attempts': 3,
                 'monthly_sw_industry_full_fetch_cron': 'at:03:20',
                 'daily_data_fetch_timeout': 86400,
                 'strategy_plan_generation_cron': 'at:18:50',
@@ -407,6 +411,8 @@ class IntegrationConfig:
             'SCHEDULER_ENABLED': ('service', 'scheduler_enabled', bool),
             'SCHEDULER_TIMEZONE': ('service', 'scheduler_timezone', str),
             'SCHEDULER_DAILY_CRON': ('service', 'daily_data_fetch_cron', str),
+            'SCHEDULER_DAILY_INDEX_RETRY_INTERVAL_SECONDS': ('service', 'daily_index_fetch_retry_interval_seconds', int),
+            'SCHEDULER_DAILY_INDEX_RETRY_ATTEMPTS': ('service', 'daily_index_fetch_retry_attempts', int),
             'SCHEDULER_MONTHLY_SW_FULL_CRON': ('service', 'monthly_sw_industry_full_fetch_cron', str),
             'SCHEDULER_DAILY_FETCH_TIMEOUT': ('service', 'daily_data_fetch_timeout', int),
             'SCHEDULER_STRATEGY_PLAN_CRON': ('service', 'strategy_plan_generation_cron', str),

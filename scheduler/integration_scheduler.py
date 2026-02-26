@@ -458,15 +458,44 @@ class IntegrationScheduler:
             timeout = 86400
         return max(600, timeout)
 
+    def _daily_index_retry_interval_seconds(self) -> int:
+        """每日指数抓取失败后的补抓间隔（秒）。"""
+        value = getattr(self.config.service, "daily_index_fetch_retry_interval_seconds", None)
+        try:
+            seconds = int(value) if value is not None else 1800
+        except Exception:
+            seconds = 1800
+        return max(60, seconds)
+
+    def _daily_index_retry_attempts(self) -> int:
+        """每日指数抓取失败后的最大重试次数（不含首次触发）。"""
+        value = getattr(self.config.service, "daily_index_fetch_retry_attempts", None)
+        try:
+            attempts = int(value) if value is not None else 3
+        except Exception:
+            attempts = 3
+        return max(0, attempts)
+
     def _should_trigger(self, state: Dict[str, Any], spec: Dict[str, Any], now: datetime) -> bool:
         today_str = now.date().isoformat()
+        try:
+            retry_attempts = int(spec.get("retry_attempts", 2))
+        except Exception:
+            retry_attempts = 2
+        retry_attempts = max(0, retry_attempts)
+        try:
+            retry_interval_seconds = int(spec.get("retry_interval_seconds", 60))
+        except Exception:
+            retry_interval_seconds = 60
+        retry_interval_seconds = max(60, retry_interval_seconds)
+        max_failures_today = retry_attempts + 1
         if state.get("running"):
             return False
-        if state.get("failure_count", 0) >= 3 and state.get("last_attempt_date") == today_str:
+        if state.get("failure_count", 0) >= max_failures_today and state.get("last_attempt_date") == today_str:
             return False
         if state.get("last_status") == "failed" and state.get("last_attempt_date") == today_str:
             last_completed = self._parse_iso_dt(state.get("last_completed_at"))
-            if last_completed and (now - last_completed) < timedelta(seconds=60):
+            if last_completed and (now - last_completed) < timedelta(seconds=retry_interval_seconds):
                 return False
             return True
 
@@ -524,7 +553,11 @@ class IntegrationScheduler:
             {
                 "task_name": "daily_index_fetch",
                 "task_id": None,
-                "spec": daily_spec,
+                "spec": {
+                    **daily_spec,
+                    "retry_interval_seconds": self._daily_index_retry_interval_seconds(),
+                    "retry_attempts": self._daily_index_retry_attempts(),
+                },
                 "handler": self._trigger_daily_index_fetch,
                 "handler_args": (None,)
             },
@@ -1204,6 +1237,8 @@ class IntegrationScheduler:
                 )
                 run_result = await flowhub_adapter.run_task(task.get('task_id'))
                 job_id = run_result.get('job_id')
+                if not job_id:
+                    raise AdapterException("IntegrationScheduler", "Failed to create daily index data fetch job")
                 logger.info(f"Index daily data fetch job created: {job_id}")
 
                 # 等待任务完成（最多30分钟）
@@ -1211,14 +1246,50 @@ class IntegrationScheduler:
                 result = await flowhub_adapter.wait_for_job_completion(job_id, timeout=1800)
 
                 job_status = result.get('status')
-                if self._is_success_status(job_status):
+                result_payload = result.get("result") if isinstance(result, dict) and isinstance(result.get("result"), dict) else {}
+                try:
+                    records_count = int(result_payload.get("records_count") or 0)
+                except Exception:
+                    records_count = 0
+                try:
+                    saved_count = int(result_payload.get("saved_count") or 0)
+                except Exception:
+                    saved_count = 0
+                try:
+                    skipped_count = int(result_payload.get("skipped_count") or 0)
+                except Exception:
+                    skipped_count = 0
+
+                has_any_result = (records_count > 0) or (saved_count > 0) or (skipped_count > 0)
+                if self._is_success_status(job_status) and has_any_result:
                     logger.info(f"Index daily data fetch job {job_id} completed successfully")
                     self._record_task_execution(
                         "daily_index_fetch",
                         "completed",
-                        f"Index data fetch job completed: {job_id}"
+                        (
+                            "Index data fetch job completed: "
+                            f"{job_id} (records={records_count}, saved={saved_count}, skipped={skipped_count})"
+                        )
                     )
                     await self._notify_data_fetch_completed(['stock_index_data_fetch'])
+                elif self._is_success_status(job_status):
+                    logger.warning(
+                        "Index daily data fetch returned empty dataset, will trigger retry policy",
+                        extra={
+                            "job_id": job_id,
+                            "records_count": records_count,
+                            "saved_count": saved_count,
+                            "skipped_count": skipped_count,
+                        },
+                    )
+                    self._record_task_execution(
+                        "daily_index_fetch",
+                        "failed",
+                        (
+                            "Index data fetch returned empty dataset "
+                            f"(job_id={job_id}, records={records_count}, saved={saved_count}, skipped={skipped_count})"
+                        )
+                    )
                 else:
                     logger.warning(f"Index daily data fetch job {job_id} finished with status: {job_status}")
                     self._record_task_execution(
