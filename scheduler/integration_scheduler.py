@@ -38,8 +38,8 @@ class IntegrationScheduler:
     """Integration Service 定时任务调度器"""
 
     STRUCTURE_FLOWHUB_CRON_TEMPLATES: Dict[str, str] = {
-        "brain_industry_board_fetch": "10 16 * * 1-5",
-        "brain_concept_board_fetch": "20 16 * * 1-5",
+        "brain_industry_board_fetch": "30 16 * * 1-5",
+        "brain_concept_board_fetch": "30 16 * * 1-5",
         "brain_industry_board_stocks_fetch": "40 16 * * 1-5",
         "brain_concept_board_stocks_fetch": "55 16 * * 1-5",
         "brain_industry_moneyflow_fetch": "10 17 * * 1-5",
@@ -121,7 +121,7 @@ class IntegrationScheduler:
         )
 
         # 新增任务：申万行业映射月度全量校验（仅每月1日执行 full_update）
-        monthly_sw_cron = getattr(self.config.service, 'monthly_sw_industry_full_fetch_cron', None) or "at:03:20"
+        monthly_sw_cron = getattr(self.config.service, 'monthly_sw_industry_full_fetch_cron', None) or "at:16:30"
         monthly_sw_plans = self._parse_cron_to_plans(monthly_sw_cron)
         blueprint.task('/monthly_sw_industry_full_fetch', plans=monthly_sw_plans)(
             self._trigger_monthly_sw_industry_full_fetch
@@ -537,7 +537,7 @@ class IntegrationScheduler:
         now = datetime.now()
         daily_cron = getattr(self.config.service, 'daily_data_fetch_cron', None)
         daily_spec = self._parse_cron_spec(daily_cron) if daily_cron else {"mode": "every", "seconds": 86400}
-        monthly_sw_cron = getattr(self.config.service, 'monthly_sw_industry_full_fetch_cron', None) or "at:03:20"
+        monthly_sw_cron = getattr(self.config.service, 'monthly_sw_industry_full_fetch_cron', None) or "at:16:30"
         monthly_sw_spec = self._parse_cron_spec(monthly_sw_cron)
         strategy_plan_cron = getattr(self.config.service, 'strategy_plan_generation_cron', None) or "at:18:50"
         strategy_plan_spec = self._parse_cron_spec(strategy_plan_cron)

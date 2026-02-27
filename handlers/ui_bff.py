@@ -406,7 +406,7 @@ class UIBffHandler(BaseHandler):
     }
 
     MACRO_CYCLE_TEMPLATE_SCHEDULES = {
-        "macro_calendar_data": {"schedule_type": "cron", "schedule_value": "30 7 * * *"},
+        "macro_calendar_data": {"schedule_type": "cron", "schedule_value": "30 16 * * *"},
         "price_index_data": {"schedule_type": "cron", "schedule_value": "10 19 1 * *"},
         "money_supply_data": {"schedule_type": "cron", "schedule_value": "15 19 1 * *"},
         "social_financing_data": {"schedule_type": "cron", "schedule_value": "20 19 1 * *"},
@@ -416,8 +416,8 @@ class UIBffHandler(BaseHandler):
     }
 
     STRUCTURE_ROTATION_TEMPLATE_SCHEDULES = {
-        "industry_board": {"schedule_type": "cron", "schedule_value": "10 16 * * 1-5"},
-        "concept_board": {"schedule_type": "cron", "schedule_value": "20 16 * * 1-5"},
+        "industry_board": {"schedule_type": "cron", "schedule_value": "30 16 * * 1-5"},
+        "concept_board": {"schedule_type": "cron", "schedule_value": "30 16 * * 1-5"},
         "industry_board_stocks": {"schedule_type": "cron", "schedule_value": "40 16 * * 1-5"},
         "concept_board_stocks": {"schedule_type": "cron", "schedule_value": "55 16 * * 1-5"},
         "industry_moneyflow_data": {"schedule_type": "cron", "schedule_value": "10 17 * * 1-5"},
@@ -946,31 +946,6 @@ class UIBffHandler(BaseHandler):
                     )
                     working_tasks.append(created_task)
                     tasks_by_type.setdefault(data_type, []).append(created_task)
-                    if task_id:
-                        try:
-                            run_payload = await self._fetch_upstream_json(
-                                request,
-                                "flowhub",
-                                f"/api/v1/tasks/{task_id}/run",
-                                method="POST",
-                                payload={},
-                            )
-                            run_data = self._unwrap_response_data(run_payload)
-                            report["triggered_runs"].append(
-                                {
-                                    "data_type": data_type,
-                                    "task_id": task_id,
-                                    "job_id": run_data.get("job_id") if isinstance(run_data, dict) else None,
-                                }
-                            )
-                        except Exception as exc:
-                            report["errors"].append(
-                                {
-                                    "data_type": data_type,
-                                    "stage": "run",
-                                    "message": str(exc),
-                                }
-                            )
                 except Exception as exc:
                     report["errors"].append(
                         {
