@@ -166,6 +166,7 @@ class UIBffHandler(BaseHandler):
         RouteSpec("GET", re.compile(r"^/api/v1/ui/structure-rotation/policy/diff$"), "macro"),
         RouteSpec("GET", re.compile(r"^/api/v1/ui/candidates/clusters$"), "execution"),
         RouteSpec("GET", re.compile(r"^/api/v1/ui/candidates/events$"), "execution"),
+        RouteSpec("GET", re.compile(r"^/api/v1/ui/candidates/symbols/(?P<symbol>[^/]+)/chart$"), "execution"),
         RouteSpec("GET", re.compile(r"^/api/v1/ui/candidates/audit/report$"), "execution"),
         RouteSpec(
             "POST",

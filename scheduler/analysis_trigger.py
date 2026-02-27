@@ -340,9 +340,19 @@ class AnalysisTriggerScheduler:
                 promote_job_id = None
                 if sync_enabled:
                     try:
+                        gate_closed_mode = str(
+                            os.getenv("EXECUTION_CANDIDATE_GATE_CLOSED_MODE", "strict")
+                        ).strip().lower()
+                        if gate_closed_mode not in {"obs_shadow", "strict", "block"}:
+                            logger.warning(
+                                "Invalid EXECUTION_CANDIDATE_GATE_CLOSED_MODE=%s, fallback to strict",
+                                gate_closed_mode,
+                            )
+                            gate_closed_mode = "strict"
                         sync_params = {
                             "lookback_days": max(1, int(os.getenv("EXECUTION_CANDIDATE_SYNC_LOOKBACK_DAYS", "7"))),
                             "max_candidates": max(1, int(os.getenv("EXECUTION_CANDIDATE_SYNC_MAX_CANDIDATES", "120"))),
+                            "gate_closed_mode": gate_closed_mode,
                             "analyzers": ["livermore", "chanlun", "multi_indicator"],
                             "entry_rules": {
                                 "min_analyzer_hits": max(1, int(os.getenv("EXECUTION_CANDIDATE_SYNC_MIN_HITS", "2"))),
