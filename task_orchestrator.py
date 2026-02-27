@@ -64,6 +64,81 @@ class TaskOrchestrator:
         # enforce the exact supported set to avoid brain/service drift.
         "flowhub": set(),
     }
+    JOB_TYPE_ZH_MAP = {
+        # Flowhub data jobs
+        "daily_ohlc": "个股日线行情(单标的)",
+        "batch_daily_ohlc": "个股日线行情",
+        "daily_basic": "个股日线基础(单标的)",
+        "batch_daily_basic": "个股日线基础",
+        "adj_factors": "复权因子",
+        "index_daily_data": "指数日线",
+        "index_components": "指数成分",
+        "index_info": "指数信息",
+        "trade_calendar_data": "交易日历",
+        "sw_industry_data": "申万行业",
+        "industry_board": "行业板块行情",
+        "concept_board": "概念板块行情",
+        "industry_board_stocks": "行业板块成分股",
+        "concept_board_stocks": "概念板块成分股",
+        "board_data": "板块数据",
+        "index_data": "指数数据",
+        "industry_moneyflow_data": "行业资金流",
+        "concept_moneyflow_data": "概念资金流",
+        "macro_calendar_data": "宏观日历",
+        "price_index_data": "价格指数",
+        "money_supply_data": "货币供应",
+        "social_financing_data": "社会融资",
+        "investment_data": "投资数据",
+        "industrial_data": "工业数据",
+        "sentiment_index_data": "情绪指数",
+        "innovation_data": "创新数据",
+        "inventory_cycle_data": "库存周期",
+        "demographic_data": "人口数据",
+        "gdp_data": "GDP",
+        "stock_index_data": "股票指数",
+        "market_flow_data": "市场资金流",
+        "interest_rate_data": "利率数据",
+        "commodity_price_data": "大宗商品",
+        "suspend_data": "停复牌",
+        "st_status_data": "ST状态",
+        "stk_limit_data": "涨跌停",
+        "backfill_full_history": "全历史回补",
+        "backfill_data_type_history": "指定类型历史回补",
+        "backfill_resume_run": "历史回补续跑",
+        "backfill_retry_failed_shards": "回补失败重试",
+        # Execution UI jobs
+        "ui_candidates_history_query": "候选池历史查询",
+        "ui_candidates_promote": "候选池提升",
+        "ui_candidates_auto_promote": "候选池自动提升",
+        "ui_candidates_merge": "候选池合并",
+        "ui_candidates_ignore": "候选池忽略",
+        "ui_candidates_mark_read": "候选池标记已读",
+        "ui_candidates_watchlist_update": "候选池状态更新",
+        "ui_candidates_sync_from_analysis": "候选池分析同步",
+        "ui_candidates_backfill_metadata": "候选池元数据回补",
+        "ui_research_decision": "标的研究决策",
+        "ui_research_freeze": "标的研究冻结",
+        "ui_research_compare": "标的研究对比",
+        "ui_research_archive": "标的研究归档",
+        "ui_research_unfreeze": "标的研究解冻",
+        "ui_research_replace_helper": "研究助手替换",
+        "ui_strategy_report_run": "策略报告运行",
+        "ui_strategy_report_compare": "策略报告对比",
+        "ui_strategy_config_apply": "策略配置应用",
+        "ui_strategy_preset_save": "策略预设保存",
+        "batch_analyze": "批量分析",
+        # Macro/Portfolio UI jobs
+        "ui_macro_cycle_freeze": "宏观周期冻结",
+        "ui_macro_cycle_mark_seen": "宏观周期标记已读",
+        "ui_macro_cycle_mark_seen_batch": "宏观周期批量标记已读",
+        "ui_macro_cycle_apply_portfolio": "宏观周期应用到组合",
+        "ui_macro_cycle_apply_snapshot": "宏观周期应用到快照",
+        "ui_rotation_policy_freeze": "轮动策略冻结",
+        "ui_rotation_policy_apply": "轮动策略应用",
+        "ui_rotation_policy_save": "轮动策略保存",
+        "ui_sim_order_create": "模拟下单",
+        "ui_sim_order_cancel": "模拟撤单",
+    }
     HISTORY_MAX = 200
     # Keep per-service listing lightweight to avoid large payload amplification.
     SERVICE_PAGE_SIZE = 20
@@ -149,6 +224,8 @@ class TaskOrchestrator:
                     mapped_id = await self._find_task_job_id(svc, service_job_id)
                     task_job_id = mapped_id or f"{svc}:{service_job_id}"
                     normalized = self._normalize_job(svc, raw_job, task_job_id=task_job_id)
+                    if mapped_id:
+                        normalized = await self._merge_record_metadata(mapped_id, normalized)
                     normalized = self._compact_job_for_list(normalized)
                     if mapped_id:
                         await self._append_history_if_changed(mapped_id, normalized)
@@ -218,6 +295,8 @@ class TaskOrchestrator:
             payload = await self._request_service(service, "GET", f"/api/v1/jobs/{service_job_id}")
             normalized = self._normalize_job(service, self._extract_data(payload), task_job_id=mapped_task_job_id or task_job_id)
             if mapped_task_job_id:
+                normalized = await self._merge_record_metadata(mapped_task_job_id, normalized)
+            if mapped_task_job_id:
                 await self._append_history_if_changed(mapped_task_job_id, normalized)
             return normalized
         except UpstreamServiceError as exc:
@@ -235,6 +314,7 @@ class TaskOrchestrator:
                 },
                 task_job_id=mapped_task_job_id,
             )
+            fallback = await self._merge_record_metadata(mapped_task_job_id, fallback)
             fallback["error"] = {
                 "upstream_status": exc.status,
                 "message": exc.error.get("message"),
@@ -489,12 +569,30 @@ class TaskOrchestrator:
         completed_at = job.get("completed_at") or job.get("end_time")
         if updated_at is None:
             updated_at = completed_at or started_at or created_at
+        task_name = (
+            metadata.get("task_name")
+            or params.get("task_name")
+            or job.get("task_name")
+            or params.get("job_name")
+            or job.get("job_name")
+            or job.get("name")
+            or job.get("title")
+        )
+        job_type_zh = self._resolve_job_type_zh(
+            service=service,
+            job_type=str(job_type or ""),
+            params=params,
+            metadata=metadata,
+            task_name=task_name,
+        )
 
         return {
             "id": task_job_id,
             "service": service,
             "service_job_id": service_job_id,
             "job_type": job_type,
+            "job_type_zh": job_type_zh,
+            "task_name": task_name,
             "status": status,
             "progress": progress,
             "cancellable": status in {"queued", "running"},
@@ -507,6 +605,32 @@ class TaskOrchestrator:
             "completed_at": completed_at,
             "metadata": metadata,
         }
+
+    async def _merge_record_metadata(self, task_job_id: str, normalized: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(normalized or {})
+        record = await self._load_task_record(task_job_id)
+        if not isinstance(record, dict):
+            return merged
+        record_metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+        current_metadata = merged.get("metadata") if isinstance(merged.get("metadata"), dict) else {}
+        merged_metadata = {**record_metadata, **current_metadata}
+        merged["metadata"] = merged_metadata
+
+        if not merged.get("job_type_zh"):
+            merged["job_type_zh"] = self._resolve_job_type_zh(
+                service=str(merged.get("service") or ""),
+                job_type=str(merged.get("job_type") or ""),
+                params={},
+                metadata=merged_metadata,
+                task_name=merged.get("task_name"),
+            )
+        if not merged.get("task_name"):
+            merged["task_name"] = (
+                merged_metadata.get("task_name")
+                or merged_metadata.get("task_name_zh")
+                or merged_metadata.get("job_name")
+            )
+        return merged
 
     @staticmethod
     def _compact_job_for_list(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -540,6 +664,44 @@ class TaskOrchestrator:
         if value in {"cancelled", "canceled"}:
             return "cancelled"
         return "failed"
+
+    @classmethod
+    def _resolve_job_type_zh(
+        cls,
+        *,
+        service: str,
+        job_type: str,
+        params: Dict[str, Any],
+        metadata: Dict[str, Any],
+        task_name: Any = None,
+    ) -> Optional[str]:
+        for key in ("job_type_zh", "job_type_label_zh", "job_name_zh", "task_name_zh"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        for key in ("job_type_zh", "job_type_label_zh", "job_name_zh", "task_name_zh"):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        token = str(job_type or "").strip().lower()
+        mapped = cls.JOB_TYPE_ZH_MAP.get(token)
+        if mapped:
+            return mapped
+
+        name_token = str(task_name or "").strip()
+        if name_token and cls._contains_cjk(name_token):
+            return name_token
+
+        if service == "flowhub":
+            task_label = str(params.get("task_name") or "").strip()
+            if task_label and cls._contains_cjk(task_label):
+                return task_label
+        return None
+
+    @staticmethod
+    def _contains_cjk(value: str) -> bool:
+        return any("\u4e00" <= ch <= "\u9fff" for ch in str(value or ""))
 
     @staticmethod
     def _normalize_progress(progress: Any, status: str) -> int:
