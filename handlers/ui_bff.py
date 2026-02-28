@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import secrets
 import sys
+from urllib.parse import unquote
 import uuid
 from typing import Any, Callable, Dict, Optional, Pattern
 
@@ -403,6 +404,27 @@ class UIBffHandler(BaseHandler):
         "failed": "抓取失败",
         "missing_task": "未配置任务",
         "backend_error": "后端接口异常",
+    }
+
+    MARKET_SNAPSHOT_TEMPLATE_SCHEDULES = {
+        "stock_index_data": {"schedule_type": "cron", "schedule_value": "30 16 * * 1-5"},
+        "market_flow_data": {"schedule_type": "cron", "schedule_value": "40 16 * * 1-5"},
+        "interest_rate_data": {"schedule_type": "cron", "schedule_value": "45 16 * * 1-5"},
+        "commodity_price_data": {"schedule_type": "cron", "schedule_value": "50 16 * * 1-5"},
+    }
+
+    MARKET_SNAPSHOT_TEMPLATE_NAMES = {
+        "stock_index_data": "模板·市场快照·指数行情",
+        "market_flow_data": "模板·市场快照·市场资金流",
+        "interest_rate_data": "模板·市场快照·利率与流动性",
+        "commodity_price_data": "模板·市场快照·大宗商品",
+    }
+
+    MARKET_SNAPSHOT_TEMPLATE_PARAMS = {
+        "stock_index_data": {"incremental": True},
+        "market_flow_data": {"incremental": True},
+        "interest_rate_data": {"incremental": True},
+        "commodity_price_data": {"incremental": True},
     }
 
     MACRO_CYCLE_TEMPLATE_SCHEDULES = {
@@ -895,6 +917,58 @@ class UIBffHandler(BaseHandler):
             )
         return templates
 
+    def _build_market_snapshot_default_templates(self) -> list[Dict[str, Any]]:
+        templates: list[Dict[str, Any]] = []
+        market_cfg = self.DATA_READINESS_REQUIREMENTS.get("market_snapshot") or {}
+        data_items = market_cfg.get("data_types") if isinstance(market_cfg.get("data_types"), list) else []
+        for item in data_items:
+            if not isinstance(item, dict):
+                continue
+            data_type = str(item.get("data_type") or "").strip().lower()
+            if not data_type:
+                continue
+            data_label = str(item.get("label") or data_type).strip() or data_type
+            schedule = self.MARKET_SNAPSHOT_TEMPLATE_SCHEDULES.get(
+                data_type,
+                {"schedule_type": "cron", "schedule_value": "30 16 * * 1-5"},
+            )
+            default_params = self.MARKET_SNAPSHOT_TEMPLATE_PARAMS.get(data_type, {"incremental": True})
+            templates.append(
+                {
+                    "name": self.MARKET_SNAPSHOT_TEMPLATE_NAMES.get(
+                        data_type,
+                        f"模板·市场快照·{data_label}",
+                    ),
+                    "data_type": data_type,
+                    "schedule_type": schedule.get("schedule_type", "cron"),
+                    "schedule_value": schedule.get("schedule_value", "30 16 * * 1-5"),
+                    "enabled": True,
+                    "allow_overlap": False,
+                    "params": {
+                        "data_type": data_type,
+                        **default_params,
+                    },
+                }
+            )
+        return templates
+
+    def _build_all_default_pipeline_templates(self) -> list[Dict[str, Any]]:
+        return [
+            *self._build_market_snapshot_default_templates(),
+            *self._build_macro_cycle_default_templates(),
+            *self._build_structure_rotation_default_templates(),
+            *self._build_watchlist_default_templates(),
+        ]
+
+    def _find_default_pipeline_template(self, data_type: str) -> Optional[Dict[str, Any]]:
+        token = str(data_type or "").strip().lower()
+        if not token:
+            return None
+        for template in self._build_all_default_pipeline_templates():
+            if str(template.get("data_type") or "").strip().lower() == token:
+                return template
+        return None
+
     async def _ensure_macro_cycle_default_pipelines(
         self,
         request: web.Request,
@@ -913,11 +987,7 @@ class UIBffHandler(BaseHandler):
                     continue
                 tasks_by_type.setdefault(token, []).append(task)
 
-            templates = [
-                *self._build_macro_cycle_default_templates(),
-                *self._build_structure_rotation_default_templates(),
-                *self._build_watchlist_default_templates(),
-            ]
+            templates = self._build_all_default_pipeline_templates()
             for template in templates:
                 data_type = str(template.get("data_type") or "").strip().lower()
                 if not data_type:
@@ -1014,6 +1084,16 @@ class UIBffHandler(BaseHandler):
     @classmethod
     def _resolve_readiness_state_label(cls, state: str) -> str:
         return cls.READINESS_LABELS.get(str(state or "").strip().lower(), "未知")
+
+    @staticmethod
+    def _resolve_manual_trigger_policy(state: str) -> tuple[bool, str]:
+        normalized_state = str(state or "").strip().lower()
+        manual_trigger_allowed = normalized_state not in {"ready", "fetching"}
+        if manual_trigger_allowed:
+            return True, "当前状态允许手动触发。"
+        if normalized_state == "ready":
+            return False, "数据已准备好，无需手动触发。"
+        return False, "相关任务正在抓取中，请稍后再试。"
 
     @classmethod
     def _extract_upstream_error_code(cls, exc: UpstreamServiceError) -> str:
@@ -1190,6 +1270,8 @@ class UIBffHandler(BaseHandler):
                 state = "waiting_schedule"
                 detail = "任务已配置，等待调度器拉起。"
 
+        manual_trigger_allowed, manual_trigger_reason = self._resolve_manual_trigger_policy(state)
+
         return {
             "kind": "dataset",
             "id": f"{page_key}:{data_type}",
@@ -1214,6 +1296,8 @@ class UIBffHandler(BaseHandler):
             "pipeline_schedule_type": schedule_type,
             "pipeline_schedule_value": schedule_value,
             "pipeline_next_run_at": next_run_at if next_run_ts > 0 else None,
+            "manual_trigger_allowed": manual_trigger_allowed,
+            "manual_trigger_reason": manual_trigger_reason,
         }
 
     async def _build_data_page_checks(
@@ -1587,6 +1671,9 @@ class UIBffHandler(BaseHandler):
                         assessed["detail"] = (
                             f"已检测到真实入库数据（{freshness.get('table')}），最新日期 {latest_data_date}。"
                         )
+                        manual_allowed, manual_reason = self._resolve_manual_trigger_policy("ready")
+                        assessed["manual_trigger_allowed"] = manual_allowed
+                        assessed["manual_trigger_reason"] = manual_reason
                     if not str(assessed.get("last_fetch_status") or "").strip():
                         assessed["last_fetch_status"] = "has_data"
                 items.append(assessed)
@@ -2009,6 +2096,165 @@ class UIBffHandler(BaseHandler):
         orchestrator = self.get_app_component(request, "task_orchestrator")
         payload = await orchestrator.get_task_job_history(task_job_id)
         return self.success_response(payload)
+
+    @staticmethod
+    def _extract_any_job_id(payload: Dict[str, Any]) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        for key in ("job_id", "task_job_id", "id"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        data = payload.get("data")
+        if isinstance(data, dict):
+            for key in ("job_id", "task_job_id", "id"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return ""
+
+    async def _run_flowhub_pipeline_task(self, request: web.Request, pipeline_task_id: str) -> Dict[str, Any]:
+        payload = await self._fetch_upstream_json(
+            request,
+            "flowhub",
+            f"/api/v1/tasks/{pipeline_task_id}/run",
+            method="POST",
+            payload={},
+        )
+        return self._unwrap_response_data(payload)
+
+    @staticmethod
+    def _build_fallback_pipeline_template(data_type: str) -> Dict[str, Any]:
+        token = str(data_type or "").strip().lower()
+        return {
+            "name": f"模板·自动创建·{token}",
+            "data_type": token,
+            "schedule_type": "cron",
+            "schedule_value": "30 16 * * 1-5",
+            "enabled": True,
+            "allow_overlap": False,
+            "params": {
+                "data_type": token,
+                "incremental": True,
+            },
+        }
+
+    async def _create_and_run_flowhub_pipeline(
+        self,
+        request: web.Request,
+        data_type: str,
+    ) -> tuple[str, Dict[str, Any], Dict[str, Any]]:
+        template = self._find_default_pipeline_template(data_type) or self._build_fallback_pipeline_template(data_type)
+        created_payload = await self._fetch_upstream_json(
+            request,
+            "flowhub",
+            "/api/v1/tasks",
+            method="POST",
+            payload=template,
+        )
+        created_task = self._unwrap_response_data(created_payload)
+        pipeline_task_id = str(created_task.get("task_id") or "").strip() if isinstance(created_task, dict) else ""
+        if not pipeline_task_id:
+            raise RuntimeError("Failed to create flowhub pipeline: missing task_id")
+        run_payload = await self._run_flowhub_pipeline_task(request, pipeline_task_id)
+        return pipeline_task_id, run_payload, template
+
+    async def _handle_system_readiness_item_trigger(self, request: web.Request, item_id: str) -> web.Response:
+        normalized_item_id = str(item_id or "").strip()
+        if not normalized_item_id:
+            return self.error_response(
+                "Missing readiness item id",
+                400,
+                error_code="READINESS_ITEM_ID_REQUIRED",
+            )
+
+        try:
+            readiness_payload = await self._build_data_readiness_payload(request)
+            items = readiness_payload.get("items", []) if isinstance(readiness_payload, dict) else []
+            target_item = next(
+                (
+                    item
+                    for item in items
+                    if isinstance(item, dict) and str(item.get("id") or "").strip() == normalized_item_id
+                ),
+                None,
+            )
+            if not isinstance(target_item, dict):
+                return self.error_response(
+                    f"Readiness item not found: {normalized_item_id}",
+                    404,
+                    error_code="READINESS_ITEM_NOT_FOUND",
+                )
+
+            item_kind = str(target_item.get("kind") or "").strip().lower()
+            if item_kind != "dataset":
+                return self.error_response(
+                    f"Readiness item '{normalized_item_id}' is not a dataset row",
+                    409,
+                    error_code="READINESS_TRIGGER_NOT_ALLOWED",
+                )
+
+            state_before = str(target_item.get("state") or "").strip().lower()
+            if state_before in {"ready", "fetching"}:
+                return self.error_response(
+                    f"Readiness item state '{state_before}' does not allow manual trigger",
+                    409,
+                    error_code="READINESS_TRIGGER_NOT_ALLOWED",
+                )
+
+            data_type = str(target_item.get("data_type") or "").strip().lower()
+            if not data_type:
+                return self.error_response(
+                    f"Readiness item has no data_type: {normalized_item_id}",
+                    500,
+                    error_code="READINESS_TRIGGER_INTERNAL_ERROR",
+                )
+
+            pipeline_task_id = str(target_item.get("pipeline_task_id") or "").strip()
+            trigger_mode = "pipeline_run"
+            run_payload: Dict[str, Any]
+            created_template: Optional[Dict[str, Any]] = None
+
+            if pipeline_task_id:
+                run_payload = await self._run_flowhub_pipeline_task(request, pipeline_task_id)
+            else:
+                trigger_mode = "auto_created_then_run"
+                pipeline_task_id, run_payload, created_template = await self._create_and_run_flowhub_pipeline(
+                    request,
+                    data_type,
+                )
+
+            run_job_id = self._extract_any_job_id(run_payload)
+            response_payload: Dict[str, Any] = {
+                "item_id": normalized_item_id,
+                "state_before": state_before,
+                "trigger_mode": trigger_mode,
+                "pipeline_task_id": pipeline_task_id or None,
+                "run_job_id": run_job_id or None,
+                "message": "Readiness item trigger requested",
+            }
+            if created_template:
+                response_payload["created_template_name"] = created_template.get("name")
+            return self.success_response(response_payload, "Readiness item trigger requested")
+        except UpstreamServiceError as exc:
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": self._extract_upstream_error_message(exc),
+                    "error_code": "FLOWHUB_REQUEST_FAILED",
+                    "upstream_status": exc.status,
+                    "upstream_service": exc.service,
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                },
+                status=502,
+            )
+        except Exception as exc:
+            self.logger.error(f"readiness item trigger failed: item_id={normalized_item_id}, error={exc}")
+            return self.error_response(
+                "Readiness trigger failed",
+                500,
+                error_code="READINESS_TRIGGER_INTERNAL_ERROR",
+            )
 
     async def _handle_system_data_overview(self, request: web.Request) -> web.Response:
         orchestrator = self.get_app_component(request, "task_orchestrator")
@@ -3186,6 +3432,9 @@ class UIBffHandler(BaseHandler):
             matched = re.match(r"^/api/v1/ui/system/jobs/(?P<task_job_id>[^/]+)/cancel$", path)
             if matched:
                 return await self._handle_system_cancel(request, matched.group("task_job_id"))
+            matched = re.match(r"^/api/v1/ui/system/jobs/readiness/items/(?P<item_id>[^/]+)/trigger$", path)
+            if matched:
+                return await self._handle_system_readiness_item_trigger(request, unquote(matched.group("item_id")))
             matched = re.match(r"^/api/v1/ui/system/alerts/(?P<alert_id>[^/]+)/ack$", path)
             if matched:
                 return await self._handle_system_alert_ack(request, matched.group("alert_id"))
