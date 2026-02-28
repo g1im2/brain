@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -547,7 +548,9 @@ class UIBffHandler(BaseHandler):
         if self._system_api is None:
             db_manager = create_database_manager()
             self._system_api = UISystemDataAPI(db_manager)
-            self._system_api.ensure_system_schema()
+            allow_runtime_ddl = os.getenv("DB_ALLOW_RUNTIME_DDL", "false").lower() in {"1", "true", "yes", "on"}
+            if allow_runtime_ddl:
+                self._system_api.ensure_system_schema()
             self._system_api.seed_defaults()
         return self._system_api
 

@@ -6,6 +6,7 @@ Integration Service 微服务主入口
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -14,6 +15,34 @@ from aiohttp import web
 
 from app import create_app
 from config import IntegrationConfig
+
+try:
+    from econdb.schema_validator import validate_schema_on_startup
+except Exception:
+    validate_schema_on_startup = None
+
+
+def validate_schema_requirements() -> None:
+    enforce = os.getenv("DB_SCHEMA_ENFORCE", "true").lower() == "true"
+    if not enforce:
+        return
+    if validate_schema_on_startup is None:
+        logging.getLogger(__name__).warning(
+            "schema validator unavailable while DB_SCHEMA_ENFORCE=true; skip startup schema validation"
+        )
+        return
+    required_version = os.getenv("DB_SCHEMA_REQUIRED_VERSION", "V001")
+    validate_schema_on_startup(
+        required_version=required_version,
+        required_tables=[
+            "schema_migrations",
+            "ui_user_accounts",
+            "ui_roles",
+            "ui_permissions",
+            "ui_auth_sessions",
+        ],
+        exit_on_failure=os.getenv("DB_SCHEMA_EXIT_ON_FAILURE", "true").lower() == "true",
+    )
 
 
 def setup_logging(config: IntegrationConfig):
@@ -57,7 +86,10 @@ async def main():
         if not config.validate():
             logger.error("Configuration validation failed")
             sys.exit(1)
-        
+
+        # 启动前 schema 强校验（默认开启）
+        validate_schema_requirements()
+
         # 创建应用
         app = await create_app(config)
         

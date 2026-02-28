@@ -161,7 +161,9 @@ class AuthService:
         return result
 
     async def initialize(self) -> None:
-        await asyncio.to_thread(self._api.ensure_system_schema)
+        allow_runtime_ddl = os.getenv("DB_ALLOW_RUNTIME_DDL", "false").lower() in {"1", "true", "yes", "on"}
+        if allow_runtime_ddl:
+            await asyncio.to_thread(self._api.ensure_system_schema)
         await asyncio.to_thread(self._api.seed_defaults)
         admin = await asyncio.to_thread(self._api.get_user_by_username, "admin")
         if not self._lock_enabled:
