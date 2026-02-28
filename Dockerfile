@@ -37,36 +37,30 @@ COPY . ./
 # 运行阶段
 FROM base AS runtime
 
-# 创建非root用户
-RUN useradd --create-home --shell /bin/bash brain
-
 WORKDIR /app
 
 # 复制Python包
-COPY --from=builder /root/.local /home/brain/.local
+COPY --from=builder /root/.local /root/.local
 
 # 复制应用代码（从构建阶段复制）
-COPY --from=builder --chown=brain:brain /app/*.py ./
-COPY --from=builder --chown=brain:brain /app/adapters/ ./adapters/
-COPY --from=builder --chown=brain:brain /app/coordinators/ ./coordinators/
-COPY --from=builder --chown=brain:brain /app/handlers/ ./handlers/
-COPY --from=builder --chown=brain:brain /app/managers/ ./managers/
-COPY --from=builder --chown=brain:brain /app/monitors/ ./monitors/
-COPY --from=builder --chown=brain:brain /app/routers/ ./routers/
-COPY --from=builder --chown=brain:brain /app/routes/ ./routes/
-COPY --from=builder --chown=brain:brain /app/scheduler/ ./scheduler/
-COPY --from=builder --chown=brain:brain /app/validators/ ./validators/
-COPY --from=builder --chown=brain:brain /app/initializers/ ./initializers/
+COPY --from=builder /app/*.py ./
+COPY --from=builder /app/adapters/ ./adapters/
+COPY --from=builder /app/coordinators/ ./coordinators/
+COPY --from=builder /app/handlers/ ./handlers/
+COPY --from=builder /app/managers/ ./managers/
+COPY --from=builder /app/monitors/ ./monitors/
+COPY --from=builder /app/routers/ ./routers/
+COPY --from=builder /app/routes/ ./routes/
+COPY --from=builder /app/scheduler/ ./scheduler/
+COPY --from=builder /app/validators/ ./validators/
+COPY --from=builder /app/initializers/ ./initializers/
 
 # 创建必要的目录
-RUN mkdir -p logs data config && chown -R brain:brain logs data config
+RUN mkdir -p logs data config
 
 # 设置环境变量
-ENV PATH=/home/brain/.local/bin:$PATH
+ENV PATH=/root/.local/bin:$PATH
 ENV PYTHONPATH=/app
-
-# 切换到非root用户
-USER brain
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

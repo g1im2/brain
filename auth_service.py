@@ -16,6 +16,11 @@ import sys
 import uuid
 from typing import Any, Dict, Optional
 
+try:
+    import bcrypt
+except ImportError:
+    bcrypt = None
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 ECONDB_PATH = PROJECT_ROOT / "external" / "econdb"
@@ -142,6 +147,15 @@ class AuthService:
     def _verify_password(password: str, encoded_hash: Optional[str]) -> bool:
         if not encoded_hash:
             return False
+        # Support bcrypt format (e.g., $2b$12$...)
+        if encoded_hash.startswith(("$2a$", "$2b$", "$2y$", "$2x$")):
+            if bcrypt is None:
+                return False
+            try:
+                return bcrypt.checkpw(password.encode("utf-8"), encoded_hash.encode("ascii"))
+            except Exception:
+                return False
+        # Support pbkdf2_sha256 format
         try:
             algorithm, iter_raw, salt_raw, digest_raw = encoded_hash.split("$", 3)
             if algorithm != "pbkdf2_sha256":
