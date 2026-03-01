@@ -67,7 +67,6 @@ class AuthService:
         self._secret = getattr(service_cfg, "auth_jwt_secret", None) or os.getenv("BRAIN_AUTH_JWT_SECRET") or secrets.token_urlsafe(48)
         self._access_ttl = int(getattr(service_cfg, "auth_access_token_ttl_seconds", 900) or 900)
         self._refresh_ttl = int(getattr(service_cfg, "auth_refresh_token_ttl_seconds", 604800) or 604800)
-        self._admin_password = getattr(service_cfg, "auth_admin_default_password", None) or os.getenv("BRAIN_AUTH_ADMIN_PASSWORD") or "admin123!"
         self._lock_enabled = bool(getattr(service_cfg, "auth_lock_enabled", False))
         self._lock_threshold = int(getattr(service_cfg, "auth_lock_threshold", 5) or 5)
         self._lock_seconds = int(getattr(service_cfg, "auth_lock_seconds", 600) or 600)
@@ -137,13 +136,6 @@ class AuthService:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _password_hash(password: str) -> str:
-        iterations = 210000
-        salt = secrets.token_bytes(16)
-        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
-        return f"pbkdf2_sha256${iterations}${base64.b64encode(salt).decode('ascii')}${base64.b64encode(digest).decode('ascii')}"
-
-    @staticmethod
     def _verify_password(password: str, encoded_hash: Optional[str]) -> bool:
         if not encoded_hash:
             return False
@@ -197,28 +189,6 @@ class AuthService:
             elif admin and hasattr(self._api, "record_login_success"):
                 # Backward-compatible fallback for older econdb baselines.
                 await asyncio.to_thread(self._api.record_login_success, str(admin.get("id")), None)
-        if admin and not admin.get("password_hash"):
-            # Bootstrap recovery: only heal the built-in admin when the account
-            # is in an abnormal state (missing password hash).
-            await asyncio.to_thread(self._api.set_user_password, str(admin.get("id")), self._password_hash(self._admin_password), "system")
-            reset_reason = "bootstrap_missing_password_hash"
-            if hasattr(self._api, "reset_user_auth_state"):
-                await asyncio.to_thread(self._api.reset_user_auth_state, str(admin.get("id")), "system", reset_reason)
-            else:
-                # Backward-compatible fallback when older econdb is still loaded.
-                await asyncio.to_thread(self._api.record_login_success, str(admin.get("id")), None)
-            await asyncio.to_thread(
-                self._api.append_audit_log,
-                SystemAuditDTO(
-                    id=str(uuid.uuid4()),
-                    actor_id="system",
-                    action="auth.bootstrap_admin_password",
-                    target_type="user",
-                    target_id=str(admin.get("id")),
-                    payload={"username": "admin", "lock_reset": True, "reason": reset_reason},
-                    created_at=self._to_iso(self._utc_now()),
-                ),
-            )
 
     async def _cache_session_hash(self, session_id: str, refresh_hash: str) -> None:
         if not self._redis:
